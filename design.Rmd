@@ -1,0 +1,135 @@
+---
+title: "Flexible designs"
+output:
+  html_document:
+    css: docs/src/styles/styles.css
+    toc: true
+    number_sections: true
+---
+
+```{r,echo=FALSE,message=FALSE}
+knitr::opts_chunk$set(comment='.', fig.align=TRUE,message=FALSE,warning=FALSE)
+```
+
+
+# Packages
+```{r,message=FALSE}
+library(mrgsolve)
+library(dplyr)
+```
+
+
+# Introduction
+
+We are free to create data sets which (1) include
+observation records in addition to dosing records and (2) 
+there is no limit to the person-to-person heterogeneity 
+in those dosing designs.  
+
+However, it is not at all convenient to program this 
+variability into the data set.  We would rather have 
+a programmatic way to create a list of designs and 
+assign different designs to different individuals 
+or groups of individuals.  
+
+## Objective
+
+- Review `tgrid` objects, what they are and how are they used
+- Introduce methods for creating heterogeneity in observation
+schedule within a given simulation run
+
+<hr><div class = spacer></div>
+
+# tgrid objects
+
+- `mrgsolve` tracks a simulation `start` and `end` time as well 
+as a `delta` value specifying how often an observation will be made
+between `start` and `end`
+- There is also an additional, ad-hoc vector of simulation times (`add`)
+- `tgrid` objects abstract that functionality and allow us to create separate
+objects that describe a period of time using those same `start/end/delta/add` 
+elements
+- Recall also that we can work with `tgrid` objects through operations, the 
+most common being `+` ... a shift in time
+
+```{r}
+mod <- mread_cache("popex", modlib())
+
+day1 <- tgrid(0,24,2)
+day5 <- day1 + 5*24
+
+des <- c(day1,day5)
+
+des
+```
+
+## Default behavior
+Regardless how we use the `tgrid` object, every individual 
+in the simulation is assigned the same grid of observation times
+
+```{r}
+mod %>% 
+  ev(amt=100, ii=24, addl = 9) %>%
+  mrgsim(tgrid = des, nid = 10) %>% 
+  plot(DV~., type = 'b')
+```
+
+<hr><div class = spacer></div>
+
+# Assign unique end times to each ID
+
+- Create an `idata_set` including each `ID` in the run
+  - column includes `end` ... this will be the simulation 
+  end time 
+
+```{r}
+idata <- data_frame(ID = 1:100) 
+idata <- mutate(idata, end = sample(c(1,2,3,4)*168, n(), replace = TRUE))
+idata
+```
+
+Use `as_deslist` to create a list of designs ... 
+
+- We look the column indicated by `descol` to understand how many 
+different designs we need to make. 
+- By taking `descol = "end"`, there will be 4 different designs 
+by virtue of the fact that we've got 4 different end times
+
+```{r}
+des <- as_deslist(idata, descol = "end")
+des
+```
+
+What whould have happened if `descol = "ID"`?
+
+
+Now, simulate with that design list
+```{r}
+out <- 
+  mod %>% 
+  idata_set(idata) %>%
+  ev(amt=100, ii=24, addl = 28) %>%
+  design(des) %>% 
+  mrgsim(carry.out = "end")
+```
+
+It is required that we
+
+1. implement an `idata_set` ... that is where the information is coming from and 
+1. identify the `idata_set` prior to identifying the `deslist`
+
+```{r}
+plot(out, DV~time|factor(end))
+```
+
+What if we wanted less intense samples in the 2, 3, 4 week designs
+but not the 1 week design?
+
+```{r}
+
+```
+
+
+<hr><div class = spacer></div>
+
+

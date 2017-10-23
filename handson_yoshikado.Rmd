@@ -1,0 +1,213 @@
+---
+title: ""
+author: "Metrum Research Group, LLC"
+date: ""
+output: 
+  html_document:
+    css: docs/src/styles/styles.css
+---
+
+# Quantitative Analyses of Hepatic OATP-Mediated Interactions Between Statins and Inhibitors Using PBPK Modeling With a Parameter Optimization Method
+
+
+```{r echo=FALSE, message=FALSE}
+source("libPaths.R")
+library(mrgsolve)
+library(dplyr)
+library(ggplot2)
+options(mrgsolve_mread_quiet=TRUE)
+knitr::opts_chunk$set(warning=FALSE, message=FALSE, comment='.')
+```
+
+<hr><div class = spacer></div>
+
+# Cyclosporine simulation
+```{r}
+mod <- mread("yoshikado", "model")
+ec <- ev(amt=2000, cmt=2)
+out <- mod %>% ev(ec) %>% mrgsim(delta=0.01,end=12)
+sims <- as.tbl(out)
+```
+
+```{r}
+ggplot(sims, aes(x=time,y=CSA)) + 
+  geom_line() + 
+  scale_y_continuous(trans="log", limit=c(50,5000),breaks=10^seq(-4,4)) + 
+  scale_x_continuous(breaks=seq(0,12,2)) 
+```
+
+<hr><div class = spacer></div>
+
+
+# Pitavastatin (EHC model) simulation
+
+- Single 30 mg dose of pitavastatin
+
+```{r}
+ep <- ev(amt=30)
+out <- mod %>% ev(ep) %>% mrgsim(delta=0.1,add=seq(0,0.5,0.01), end=21)
+simsp <- as.tbl(out)
+```
+
+
+```{r}
+ggplot(simsp, aes(x=time,y=CP)) + 
+scale_y_continuous(trans="log10", limit=c(0.1,100),breaks=c(0.1,1,10,100)) + 
+geom_line() + scale_x_continuous(breaks=seq(0,14,2),limit=c(0,14)) 
+```
+
+<hr><div class = spacer></div>
+
+# Now, simulate the DDI
+```{r}
+out <- mod %>% ev(ep + ec) %>% mrgsim(delta=0.01, end=14)
+```
+
+
+## Blue: pitavastatin, no ddi; red: pitavastatin with CsA ddi
+```{r}
+simspc <- as.tbl(out)
+ggplot(simspc, aes(x=time,y=CP)) + 
+  scale_y_continuous(trans="log10", limit=c(0.1,100), breaks=c(0.1,1,10,100)) + 
+  geom_line(col="firebrick") + scale_x_continuous(breaks=seq(0,14,2),limit=c(0,14)) + 
+  geom_line(data=simsp, aes(x=time,y=CP),col="darkslateblue")
+```
+
+<hr><div class = spacer></div>
+
+# Sensitivity analysis
+
+```{r}
+library(MASS)
+```
+
+
+Pick some parameters for sensitivity analysis
+
+```{r}
+param(mod)
+l <- as.numeric(param(mod))
+l
+```
+
+First, look at partition coefficients
+Maybe try the flows later
+
+```{r}
+p1 <- grepl("^Q", names(l))
+p2 <- grepl("Kp_", names(l))
+l <- l[p2]
+l
+```
+
+Run the sensitivity analysis with idata_set
+```{r}
+set.seed(81911)
+
+idata <- mvrnorm(500,log(l),diag(rep(1, length(l))))
+
+idata %<>% exp %>% as.data.frame %>%  mutate(ID = 1:n())
+
+head(idata)
+```
+
+```{r}
+sims <- 
+  mod %>% ev(ep+ec) %>%
+  obsonly %>% Req(CP) %>%
+  mrgsim(delta=0.25,add=0.025,end=14,idata=idata) %>%
+  filter(time > 0)
+```
+
+
+```{r}
+dim(sims)
+head(sims)
+```
+
+
+```{r}
+ggplot(sims, aes(x=time,y=CP, group=ID)) + 
+  scale_y_continuous(trans="log10", limit=c(0.1,300), breaks=c(0.3,3,30,300)) + 
+  geom_line(col="darkslateblue") + 
+  scale_x_continuous(breaks=seq(0,14,2),limit=c(0,14)) +
+  geom_line(data=simspc, col="orange", lwd=1) + 
+  geom_line(data=simsp, col="firebrick", lwd=1)  
+```
+
+<hr><div class = spacer></div>
+
+# Sensitivity analysis on inhibitor Ki for CSA
+
+```{r}
+
+N <- 300
+
+set.seed(8811112)
+
+idata <- data_frame(ID=1:N, ikiu = rnorm(N,log(mod$ikiu),sqrt(0.5)))
+
+idata %<>% exp %>% as_data_frame %>% mutate(ID = 1:n())
+
+idata
+```
+
+
+```{r}
+sims <- 
+  mod %>% ev(ep+ec) %>%
+  obsonly %>% Req(CP) %>% carry_out(ikiu) %>%
+  mrgsim(delta=0.1,add=0.025,end=14,idata=idata) %>%
+  filter(time > 0)
+dim(sims)
+head(sims)
+```
+
+* `red` no DDI
+* `orange` DDI, `ikiu` at default value
+* `blues` sensitivity analysis on `ikiu`
+
+```{r}
+ggplot(sims, aes(x=time,y=CP, group=ID)) + 
+  scale_y_continuous(trans="log10", limit=c(0.1,300), breaks=c(0.3,3,30,300)) + 
+  geom_line(aes(col=ikiu)) + 
+  scale_x_continuous(breaks=seq(0,14,2),limit=c(0,14)) +
+  geom_line(data=simspc, col="orange", lwd=1)  + 
+  geom_line(data=simsp, col="firebrick", lwd=1)  
+```
+
+
+<hr><div class = spacer></div>
+
+
+# mrgsolve tool kit
+
+
+```{r}
+library(mrgsolvetk)
+```
+
+
+https://github.com/mrgsolve/mrgsolvetk
+
+
+```{r}
+out <- 
+  mod %>% 
+  ev(ep+ec) %>% update(delta = 0.1, end = 14) %>% Req(CP) %>%
+  sens_norm(n = 25, pars = names(l), cv = 100)
+out
+```
+
+
+```{r}
+ggplot(as.data.frame(out), aes(time,CP, col=factor(ID))) + 
+  geom_line() + scale_y_continuous(trans = "log10")
+```
+
+
+
+
+
+
+

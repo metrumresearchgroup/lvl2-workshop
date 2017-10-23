@@ -1,0 +1,109 @@
+---
+title: "Introduction"
+author: "Metrum Research Group, LLC"
+date: ""
+output:
+  slidy_presentation:
+    fig_width: 9
+    fig_height: 5
+    font_adjustment: 3
+    transition: none
+    css: styles/slidystyles.css
+    footer: metrumrg &copy 2017
+---
+
+
+```{r, echo=FALSE, message=FALSE}
+source("libPaths.R")
+library(parallel)
+library(ggplot2)
+library(mrgsolve)
+library(dplyr)
+library(magrittr)
+library(knitr)
+knitr::opts_chunk$set(comment='.', echo=FALSE, warning = FALSE, message = FALSE)
+```
+
+
+# Hands-on Access
+
+<h1>https://metworx-us-west-stg.metworx.com</h1>
+
+<hr>
+
+<h2>Username: mrgsolve<alrt>YOUR_NUMBER</alrt>@metrumrg.com</h2>
+
+<h2>Password: Mrgsolve2017!</h2>
+
+<hr>
+
+<h2>Rstudio Username: mrgsolve</h2>
+
+<h2>Rstudio Password: Mrgsolve2017!</h2>
+
+
+
+# Agenda for the day
+
+- `mrgsolve` review
+
+- Parameter estimation in `R`
+
+- Creating input data sets
+
+- Using `$PLUGIN`
+
+- Annotated model specification
+
+- Case studies
+     - PrTS with EPO model
+     - Simulate from EBE
+     - VPC with meropenem model
+     - OPG model - start/to/finish
+     - Combination regimens in BRAF-{V600E}-mutant colorectal cancer - Kirouac et al. 
+   
+
+# `mrgsolve`: some details
+
+- Free, open-source
+- Active development
+- A package for `R`
+- Mix of `R`, `C++`, `FORTRAN`
+    - Compilers are required
+    - Your model gets compiled and dynamicall loaded 
+    into the `R` process
+- Solver: `ODEPACK` `DLSODA` (`ADVAN 13`)
+- Integrates well with other `R` functionality
+    - __Relies__ on other `R` functionality
+    
+
+# Where to get `help`
+
+- Website: https://mrgsolve.github.io
+- GitHub: https://github.com/metrumresearchgroup
+- User guide: https://mrgsolve.github.io/user_guide
+- `R` help system (`?mrgsolve`)
+- Ask (<alrt>we like to help people</alrt>)
+    - GitHub Issue tracker
+  
+
+# mrgsolve review
+
+- Let's make up a model together
+
+# Parameter estimation
+
+- Start with linear model
+    - Hands-On: we'll give you a data set to analyze
+
+- Estimate parameters with mrgsolve - Theoph data
+
+- Estimate parameters with mrgsolve - Indometh data
+    - You improve the model
+    - Compare gradient-based method with global search
+
+- MAP Bayes Estimation
+
+- Estimate parameters in PBPK model
+    - Statin / CsA DDI model - Yoshikado et al.
+    

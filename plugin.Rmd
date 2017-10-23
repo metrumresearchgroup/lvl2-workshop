@@ -1,0 +1,210 @@
+---
+title: "Plugin"
+output: 
+  html_document:
+    css: docs/src/styles/styles.css
+    toc: true
+    number_sections: true
+---
+
+```{r,echo=FALSE}
+knitr::opts_chunk$set(comment='.', message=FALSE, warning=FALSE)
+```
+
+# Objective
+
+This vignette will introduce plugins that can be used with mrgsolve.
+
+# Setup
+```{r}
+library(mrgsolve)
+library(dplyr)
+```
+
+
+# PLUGIN
+
+* Recruit extra functionality in your `mrgsolve` model
+    - Random variates 
+    - Complex data structures
+    - Call `R` functions
+    - Call `C++` functions from other libraries (like `boost`)
+* Via `Rcpp` or `C++` coding
+* By definition require extra libraries to be compiled into the model
+    - The plugin mechanism handles all of the details
+* We make this a plugin because most models still don't require them
+    - We're introducing this topic because more and more we need this functionality
+  
+  
+# The `Rcpp` plugin
+
+* The most basic plugin
+  * Without this plugin, the __model__ is implemented in pure `C++`
+* Gives you access to `Rcpp` vectors and matrices and `R` functions
+* Gives you access to `Rcpp::R` namespace
+
+
+## Random number generation with `Rcpp`
+
+
+```{r}
+code <- '
+$PLUGIN Rcpp
+
+$MAIN
+capture y = R::rnorm(10,2);
+'
+```
+
+* We use `$PLUGIN` code block and request the `Rcpp` plugin
+* `Rcpp` provides a `C++` namespace called `R`
+* The `R` namespace includes all the expected `dpqr` functions
+  - http://dirk.eddelbuettel.com/code/rcpp/html/namespaceR.html
+
+
+This takes a little longer to compile
+```{r}
+mod <- mcode_cache("rnorm", code)
+```
+
+```{r}
+mrgsim(mod) 
+```
+
+Now, we have a random variate called `y` in the model 
+that is normally distributed with some mean and 
+some variance.  
+
+This was just a demo to get the mechanics down.  Let's 
+imagine we want to code some covariates for each subject 
+in the simulation.
+
+
+```{r}
+code <- '
+$PLUGIN Rcpp
+
+$PARAM TVCL = 20, CL_FEMALE = 0.85, pfemale = 0.6
+
+$MAIN
+if(NEWIND <= 1) {
+  capture WT = R::rnorm(70,12);
+  capture SEX = R::rbinom(1,pfemale);
+}
+
+capture CL = TVCL * pow(WT/70, 0.75);
+if(SEX==1) CL = CL * CL_FEMALE;
+'
+```
+
+```{r}
+mod <- mcode_cache("rnorm_wt", code)
+```
+
+
+```{r}
+mrgsim(mod)
+```
+
+
+We probably should have set a seed ...
+
+```{r}
+mrgsim(mod, end=-1, nid=5) 
+```
+
+
+### <alrt>TRY it</alrt>
+
+* Name: <dsb>Mixture model</dsb>
+* Create a model specification file that simulates a mixture model
+* Start with a clearance difference in two populations
+* Next, try to code a clearance difference in three populations
+
+
+## Call an R function
+
+* It is entirely possible to call `R` functions from your
+`mrgsolve` model
+* Sometimes it is helpful to accomplish your objectives
+* But note well that there is a performance ding every time
+you go back into `R` to call a function; the ding doesn't 
+mean the simulation time will increase x10, but be mindful 
+of the ding and be wise when going to this option
+* I would be much more likely to call the `R` function
+once per individual or once at the start of the problem;
+you should almost never call the `R` function inside `$ODE`
+
+Here we go ... Implement a simple reporter functionality 
+
+* In `$GLOBAL`, we declare an `Rcpp::Function` that is
+conveniently called `print`
+
+
+```{r, eval = FALSE}
+code <- '
+
+$PLUGIN Rcpp
+
+$GLOBAL
+Rcpp::Function print("print");
+
+
+$MAIN
+double y = R::rnorm(100,10);
+
+print(y);
+'
+```
+
+```{r, eval = FALSE}
+mod <- mcode_cache("print", code)
+
+out <- mrgsim(mod, end=10)
+```
+
+# `mrgx` plugin
+
+This plugin provides some functionality that 
+you might find helpful. 
+
+## Simulation of random variates inside a lower and upper limit:
+
+```{r, eval = FALSE}
+
+Sys.sleep(1)
+
+code <- '
+
+$PLUGIN mrgx
+
+$MAIN 
+if(NEWIND <= 1) {
+  double WT = mrgx::rnorm(70, 70, 60, 80);
+}
+
+$CAPTURE WT
+'
+```
+
+
+```{r}
+mod <- mcode_cache("mrgx", code)
+
+mrgsim(mod, end=-1, nid = 100)
+```
+
+
+
+## <alrt>TRY it</alrt>
+
+* Name: <dsb>clin trial</dsb>
+* Create a self-contained clinical trial simulator
+
+
+
+
+
+
+
+

@@ -1,0 +1,147 @@
+---
+title: "Workbook"
+author: "Introduction to `mrgsolve` Workshop"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    number_sections: true
+    toc: true
+    toc_float: true
+    css: docs/src/styles/styles.css
+params:
+  include: FALSE
+---
+
+```{r,echo=FALSE}
+knitr::opts_chunk$set(comment='.', warning=FALSE, message=FALSE)
+```
+
+# Setup
+```{r}
+library(mrgsolve)
+library(dplyr)
+library(magrittr)
+library(tidyr)
+options(mrgsolve_mread_quiet=TRUE)
+
+
+a <- config::get()
+```
+
+<hr><div class = spacersm></div>
+
+# Mixture model
+
+* Create a model specification file that simulates a mixture model
+* Start with a clearance difference in two populations
+    * pop1: 30% with reference CL
+    * pop2: 70% with 30% reduction in CL
+* Next, try to code a clearance difference in three populations
+    * pop1: 10% with reference CL
+    * pop2: 70% with 30% reduction in CL
+    * pop3: 20% with 50% reduction in CL
+
+
+
+```{r, "TRY Mixture model", purl=TRUE, eval=FALSE}
+
+code <- '
+$PARAM TVCL = 1, TVV = 20, TVKA = 1.5
+
+$PKMODEL cmt = "GUT CENT", depot = TRUE
+
+$MAIN
+double pop = 1;
+
+double CL = TVCL;
+
+if(pop == 2) {
+  CL = TVCL;
+}
+
+double V = TVV; double KA = TVKA;
+
+'
+
+mod <- mcode("mix", code) %>% update(end=72, delta = 0.1)
+
+mod %>% ev(amt=100) %>% mrgsim(nid = 25) %>% plot
+```
+
+Answer for two populations
+```{r, "ANSWER Mixture model 2", purl=FALSE, include=params$include}
+
+code <- '
+
+$PLUGIN Rcpp
+
+$PARAM TVCL = 1, TVV = 20, TVKA = 1.5, 
+ppop2 = 0.7, CL_pop2 = 0.7
+
+$PKMODEL cmt = "GUT CENT", depot = TRUE
+
+$MAIN
+if(NEWIND <= 1) {
+  capture pop = 1 + R::rbinom(1, ppop2);
+}
+
+double CL = TVCL;
+
+if(pop == 2) {
+  CL = TVCL * CL_pop2;
+}
+
+double V = TVV; double KA = TVKA;
+'
+
+mod <- mcode("mix", code) %>% update(end=72, delta = 0.1)
+
+out <- mod %>% ev(amt=100) %>% mrgsim(nid = 500)
+
+count(as_data_frame(out), pop) %>% mutate(n = n/(sum(n)))
+```
+
+
+Answer for three populations
+```{r, "ANSWER Mixture model 3", purl=FALSE, include=params$include}
+
+code <- '
+
+$PLUGIN Rcpp
+
+$PARAM TVCL = 1, TVV = 20, TVKA = 1.5
+ppop1 = 0.1, CL_pop2 = 0.7,
+ppop2 = 0.7, CL_pop3 = 0.5
+
+$PKMODEL cmt = "GUT CENT", depot = TRUE
+
+$MAIN
+if(NEWIND <= 1) {
+  double popvar = R::runif(0,1);
+  capture pop = 1;
+  if(popvar > ppop1) pop = 2;
+  if(popvar > (ppop1+ppop2)) pop = 3;
+}
+
+double CL = TVCL;
+
+if(pop == 2) {
+  CL = TVCL * CL_pop2;
+} 
+if(pop == 3) {
+  CL = TVCL * CL_pop3
+}
+
+double V = TVV; double KA = TVKA;
+'
+
+mod <- mcode("mix", code) %>% update(end=72, delta = 0.1)
+
+out <- mod %>% ev(amt=100) %>% mrgsim(nid = 500)
+
+count(as_data_frame(out), pop) %>% mutate(n = n/(sum(n)))
+```
+
+
+
+<hr><div class = spacer></div>

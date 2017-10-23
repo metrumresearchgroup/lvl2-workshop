@@ -1,0 +1,294 @@
+---
+title: "Fit linear model in R"
+author: ""
+date: ""
+output: html_document
+---
+
+```{r}
+knitr::opts_chunk$set(eval = FALSE)
+```
+
+
+# Packages
+
+```{r}
+library(minqa)
+library(RcppDE)
+library(ggplot2)
+library(broom)
+
+a <- config::get()
+```
+
+
+# Linear Model in R
+
+Here is a super-simple data set for fitting a linear model
+
+The data
+```{r}
+
+data <- readRDS(a$linear_data)
+
+head(data)
+
+qplot(data=data,x,y, geom="point")
+
+```
+
+
+## Simple linear regression using `lm`
+
+The `lm` function is the "right" way to fit this data.  
+It is easy to do and you get a nice presentation of the estimation
+results.
+
+
+```{r}
+
+```
+
+## Check the results
+
+- We can use the `tidy` function from `broom`
+
+```{r}
+
+```
+
+# Fit with `stats::optim`
+
+- Function to minimize
+
+- Vector of initial estimates
+-
+
+
+## Function to minimize
+```{r}
+
+```
+
+
+## Vector of initial estimates
+
+```{r}
+
+```
+
+## Fit
+
+Using `stats::optim`
+
+```{r}
+
+```
+
+Check fit, parameters coefficients
+```{r}
+
+```
+
+
+## Same problem, fit with using Simulated ANNealing
+
+```{r}
+set.seed(22020)
+
+
+```
+
+
+
+## Derivative-free optimization
+
+- Use `minqa::newuoa`
+
+```{r}
+
+```
+
+
+Did we get the same answer?
+
+```{r}
+
+```
+
+
+## Global search with `RcppDE`
+
+
+## Upper and lower bounds
+
+- This is global search
+- one for each parameter
+
+```{r}
+lower <- c()
+upper <- c()
+```
+
+
+- set a seed
+
+```{r}
+
+```
+
+## Control
+And we set the `trace` element of `control`
+to print every 10 iterations
+
+```{r}
+control <- DEoptim.control(trace = 10)
+```
+
+## Fit
+- `fun`, `lower`, `upper`, `...`, `control`
+
+```{r}
+fit.de <- DEoptim()
+```
+
+
+
+
+# Maximum likelihood estimation
+
+## Normal likelihood function
+
+- The optimizers will __minimize__ the function
+  - Until now, we have been __minimizing__ the sum of squares
+- But now, we want to do __maximum__ likelihood
+
+```{r}
+linear_ml <- function() {
+
+}
+```
+
+## Initial estimates
+
+- remember to create a `sigma` parameter
+
+```{r}
+theta <- c()
+```
+
+
+
+## Get the estimates
+
+- use `SANN` with `linear_ml` function
+- set a seed!
+
+```{r}
+
+```
+
+
+# Constrained or transformed parameters
+
+## Same setup, but estimate everything on log-scale
+
+```{r}
+linear_ml_log <- function() {
+
+}
+
+theta.log <- c()
+```
+
+## Fit with transformed parameters
+
+- use `Nelder`
+
+```{r}
+
+```
+
+
+Now, the final estimates are on log scale
+
+```{r}
+
+```
+
+We will have to un-transform them
+
+```{r}
+
+```
+
+And the log-scale estimation is still on target:
+
+```{r}
+
+```
+
+# Get standard errors for the estimates
+
+## Using `optim`
+
+- use `hessian=TRUE` in `stats::optim`
+
+```{r}
+
+```
+
+
+```{r}
+fit$hessian
+```
+
+
+## Calculate the standard error
+- invert (`solve`)
+- `diag`
+- `sqrt`
+
+```{r}
+
+```
+
+Standard errors from `stats::optim`
+```{r}
+s
+```
+
+
+Standard errors from `lm`
+```{r}
+
+```
+
+
+## Standard errors with `numDeriv::hession`
+
+```{r}
+hes <- numDeriv::hessian(linear_ml, fit$par, data=data)
+sqrt(diag(solve(hes)))
+```
+
+
+Again, this matches up well with what we got from `lm`
+```{r}
+
+```
+
+
+# Your turn
+
+The pre-clinical team has validated an *in vitro*
+assay for the development program that you
+are supporting.  They have sent you this data set for analysis.
+
+After performing some graphical data analysis,
+propose a model and generate estimates with standard errors to
+report back to the team.
+
+```{r}
+data <- readRDS(config::get("fit_01_hands"))
+```

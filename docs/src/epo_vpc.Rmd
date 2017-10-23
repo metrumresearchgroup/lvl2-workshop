@@ -1,0 +1,221 @@
+---
+title: "Visual predictive check - EPO model"
+author: "Metrum Research Group, LLC"
+date: ""
+output: 
+  github_document: 
+    toc: true
+---
+
+```{r, echo=FALSE}
+knitr::opts_chunk$set(comment='.', message=FALSE, warning=FALSE)
+```
+
+
+```{r}
+library(dplyr)
+library(mrgsolve)
+library(readr)
+library(magrittr)
+library(ggplot2)
+library(parallel)
+```
+
+
+# Some helper functions
+```{r}
+qt <- function(x,y) unname(quantile(x,prob=y/100))
+lo <- function(x) qt(x,5)
+hi <- function(x) qt(x,95)
+med <- function(x) qt(x,50)
+loci <- function(x) qt(x,2.5)
+hici <- function(x) qt(x,97.5)
+col1 <- "steelblue"
+col2 <- "firebrick"
+```
+
+Not really ground-breaking stuff.  But the code might get a little
+messy later on and I'd like to have something more
+readable if I can.
+
+# Model estimation data set
+```{r}
+a <- config::get()
+data <- read_csv(a$epo_datafile) %>% as_data_frame
+```
+
+
+```{r}
+head(data)
+```
+
+
+Notice that the data set has upper case names.  So, when we're adding
+columns let's make them upper case too.
+
+
+We need to add an `EVID` column
+
+```{r}
+data %<>% mutate(EVID = as.integer(AMT > 0))
+```
+
+
+Add a flag for doses that were given subcutaneously
+```{r}
+data %<>% 
+  group_by(ID) %>% 
+  mutate(SC = as.integer(any(CMT==1))) %>%
+  ungroup
+
+data
+```
+
+
+
+# Compartments
+
+1. EPO SC
+2. EPO CENTRAL
+7. RETICULOCYTES
+8. RED BLOOD CELLS
+9. HEMOGLOBIN
+
+```{r}
+count(data,CMT,EVID)
+```
+
+Just some grooming
+
+```{r}
+data %<>% group_by(ID,TIME,CMT,EVID) %>% slice(1) %>% ungroup
+
+count(data,CMT,EVID)
+
+data0 <- data
+```
+
+
+Take reciculocyte measurements after `SC` epo administration
+```{r}
+data <- filter(data, 
+               CMT==7 | (EVID==1 & CMT %in% c(1,2)), 
+               TIME <= 672 & SC==1)
+```
+
+
+I'm setting a nominal time here for plotting 
+```{r}
+data %<>% mutate(NTIME = round(TIME))
+```
+
+
+
+Isolate the observation records from the dosing records
+
+```{r}
+obs <- filter(data, EVID==0 & DV !=0)
+dose <- filter(data, EVID==1)
+```
+
+
+Preview the observations
+```{r}
+ggplot(data=obs) + geom_point(aes(TIME,DV)) 
+```
+
+
+
+# Load the epo model
+```{r}
+mod <- mread("epo", a$epo_project)
+mod
+```
+
+# Simulate
+
+Just going a handlful of iterations for now
+
+```{r}
+niter <- 50
+```
+
+```{r}
+simvpc <- function(i) {
+  mod %>% 
+    data_set(data) %>%
+    obsonly %>%
+    carry_out(NTIME) %>%
+    mrgsim() %>% 
+    mutate(irep = i)
+}
+```
+
+
+Summarize the observations by nominal time
+```{r}
+sumo <- 
+  obs %>% ungroup %>%
+  group_by(NTIME) %>% 
+  summarise(med = med(DV), lo=lo(DV), hi=hi(DV), N = n()) %>%
+  filter(N > 10) 
+```
+
+
+Simulate using `parallel::mclapply`
+
+```{r}
+library(parallel)
+out <- mclapply(1:niter, mc.cores=4, simvpc) %>% bind_rows
+```
+
+
+
+Now,summarize the simulated data by nominal time
+```{r}
+sum1 <- 
+  out %>% 
+  group_by(irep,NTIME) %>%
+  summarise(med = med(RETdv), lo = lo(RETdv), hi=hi(RETdv), N=n())
+```
+
+
+
+And summarize the summaries
+```{r}
+sum2 <- 
+  sum1 %>% 
+  filter(N > 10) %>%
+  group_by(NTIME) %>% 
+  summarise(medlo = loci(med), medmed = med(med), medhi = hici(med),
+            lolo =  loci(lo),  lomed  = med(lo),  lohi  = hici(lo),
+            hilo =  loci(hi),  himed  = med(hi),  hihi  = hici(hi))
+```
+
+
+
+
+# VPC plot
+
+I usually end up using brute force for this; but there 
+may be more-elegant ways to melt and plot.  In our experience,
+it's easier to QC this way
+
+```{r, fig.width=8}
+ggplot(data=sum2) + 
+  geom_ribbon(aes(NTIME,ymin=medlo, ymax = medhi),alpha=0.3,fill=col1) + 
+  geom_ribbon(aes(NTIME,ymin=lolo, ymax=lohi),alpha=0.3,fill=col1) + 
+  geom_ribbon(aes(NTIME,ymin=hilo, ymax=hihi),alpha=0.3,fill=col1) + 
+  geom_point(data=obs, aes(TIME,DV),col=col2) +
+  geom_line(aes(NTIME,y=medmed), lwd=1,col=col1) +
+  geom_line(aes(NTIME,y=lomed), lwd=1,col=col1) +
+  geom_line(aes(NTIME,y=himed), lwd=1,col=col1) +
+  geom_line(data=sumo, aes(NTIME,med),lty=2,lwd=1) + 
+  geom_line(data=sumo, aes(NTIME,lo),lty=2,lwd=1) +
+  geom_line(data=sumo, aes(NTIME,hi),lty=2,lwd=1) 
+```
+
+
+  
+ 
+

@@ -1,0 +1,21 @@
+default:
+  mero_project: "model"
+  mero_datafile: "data/Simulated_DatasetMeropenem.csv"
+  mero_partab: "nonmem/meropenem/patab"
+  az_project: "model"
+  az_model: "azithro"
+  az_datafile: "data/covariate.RDS"
+  epo_project: "model"
+  epo_post: "data/post_real.RDS"
+  epo_datafile: "data/Simulated_EPO_dataset.csv"
+  linear_data: "data/linear.RDS"
+  fit_01_hands: "data/fit_your_turn.RDS"
+  functions: "src/functions.R"
+  map_project: "model"
+  fit_03_data: "data/fig4a.csv"
+  ddi_project: "model"
+  mapk_data: "data/s10vpop.csv"
+
+  
+
+

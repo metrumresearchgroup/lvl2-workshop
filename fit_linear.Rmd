@@ -1,0 +1,452 @@
+---
+title: "Fit linear model in R"
+author: ""
+date: ""
+output:
+  html_document:
+    css: docs/src/styles/styles.css
+    toc: true
+    number_sections: true
+params:
+  eval: FALSE
+---
+
+
+```{r,echo=FALSE}
+knitr::opts_chunk$set(comment='.', message = FALSE, warning = FALSE)
+
+set.seed(11020)
+```
+
+# Packages
+
+```{r}
+library(minqa)
+library(RcppDE)
+library(ggplot2)
+library(broom)
+
+a <- config::get()
+```
+
+
+# Linear Model in R
+
+Here is a super-simple data set for fitting a linear model
+
+The data
+```{r}
+
+data <- readRDS(a$linear_data)
+
+head(data)
+
+qplot(data=data,x,y, geom="point")
+
+```
+
+<hr><div class = spacer></div>
+
+## Simple linear regression using `lm`
+
+The `lm` function is the "right" way to fit this data.  
+It is easy to do and you get a nice presentation of the estimation
+results.
+
+```{r}
+fit <- lm(y~x, data)
+```
+
+
+```{r}
+fitt <- lm(y~x, data)
+```
+
+When we call `lm`, the following statistical model is assumed:
+
+$y_i = mx_i + b + \varepsilon_{i}$
+
+and our mean function is
+
+$E(y|x) = mx + b$
+
+So this is a "simple" linear model and the mean function provides
+the predictions when we know the predictor (`x`) and parameters
+(`m` and `b`).
+
+Checking the results:
+```{r}
+fitt
+
+tidy(fitt)
+```
+
+
+Since the data and the model are so simple,
+lets use this example to explore other optimizers
+that are available in `R`.  Hopefully, the simplicity
+of the data and model will allow us to focus more
+on what the optimizer is doing.  Once we understand
+how the optimizer is working, we will be better
+equipped to look at optimization problems
+for ODE-based models and more complicated data
+sets.
+
+
+<hr><div class = spacer></div>
+
+# Fit with `stats::optim`
+
+Create a function that calculate predicted values
+
+The function arguments are:
+
+- `p` the parameters proposed by the optimizer
+- `data` we'll pass this in as an "optional" argument;
+we'll use this to get at the observed values
+
+The function generates predicted values for
+all of the observed values and returns
+the sum of squared residuals:
+
+
+```{r}
+linear_ols <- function(p, data) {
+
+  y.hat <- p[1] + p[2]*data$x
+
+  sum((y.hat - data$y)^2)
+}
+```
+
+
+When the optimizer works with this function,
+it will search the parameter space to minimize the
+sum of squared residuals.
+
+
+We must supply initial estimates
+
+```{r}
+theta <- c(beta0 = 10, beta1 = 10)
+```
+
+
+We can find the minimum of this function
+by using `stats::optim`
+
+```{r}
+fit <- optim(theta,linear_ols,data=data)
+
+fit
+
+fit$par
+
+coef(fitt)
+```
+
+<hr><div class = spacer></div>
+
+
+<hr><div class = spacer></div>
+
+## Fit with alternate optimizer
+
+By default, `stats::optim` uses a Nelder-Mead
+optimization engine.  But there are several
+options for us to choose from.  
+
+This example shows how to solve the same problem, but
+with a simulated annealing algorithm.  The setup is the
+same, but we choose `method="SANN"`
+
+```{r}
+set.seed(22020)
+
+fit <- optim(theta, linear_ols, data=data, method="SANN")
+
+fit
+
+fit$par
+
+coef(fitt)
+```
+
+<hr><div class = spacer></div>
+
+
+## Derivative-free optimization with `minqa`
+
+The other optimizer we like to use is `minqa::newuoa`.  The setup
+is exactly the same as the one we used
+for `stats::optim`
+
+```{r}
+fit <- newuoa(theta, linear_ols, data=data)
+fit
+```
+
+
+and we get about the same answer
+```{r}
+fit$par
+```
+
+<hr><div class = spacer></div>
+
+## Global search with `RcppDE`
+
+Both `DEoptim` and `RcppDE` packages provide a
+global optimization algorithm based on __Differential evolution__.
+The basic algorithm is the same, but the `Rcpp` version
+was implemented using ... `Rcpp`.  In our demo, we
+use `RcppDE::DEoptim`.
+
+The differential evolution algorithm is similar to genetic
+algorithms in that it works with a population of parameter
+sets and that population "evolves" through crossover
+or mutation like events so that subsequent generations
+contain members that are more closely associated with
+the minimum of the function.
+
+Since `DEoptim` does a global search, we need to
+provide some lower and upper bounds for the search
+space.  We will make the limits fairly
+wide here.
+
+```{r}
+lower <- rep(-1E5,2)
+upper <- rep( 1E5,2)
+```
+
+
+Also notice that we need to set a seed here
+to get reproducible results, since the initial
+popuation is randomly generated and the "evolution"
+of the population also depends on randomly
+generated numbers.
+
+```{r}
+set.seed(55641)
+```
+
+And we set the `trace` element of `control`
+to print every 10 iterations
+
+```{r}
+fit.de <- DEoptim(linear_ols, lower=lower, upper=upper, data=data,
+                  control=DEoptim.control(trace=10))
+```
+
+<hr><div class = spacer></div>
+
+# Maximum likelihood estimation
+We can also do maximum likelihood estimation.  
+Here, instead of returning the sum of the squared
+errors, we use `dnorm`, which returns the value
+of a normal likelihood function.  
+
+```{r}
+linear_ml <- function(p, data) {
+
+  y.hat <- p[1] + p[2]*data$x
+
+  -1*sum(dnorm(data$y, y.hat, p[3], log=TRUE))
+
+}
+```
+
+
+Before looking at `dnorm`, let's get re-oriented
+about `p` and `data`
+
+- `p` is the (unnamed) vector of estimates that
+have been proposed by the optimizer in __this__
+iteration
+    - Now, `p` has length 3 and `p[3]` is the residual error (standard-deviation)
+- `data` is our input data frame, where
+`x` is the independent variable and `y` is the
+dependent variable in the regression.
+
+In the `dnorm` function,
+
+- `x` is the observed data
+- `mean` is the predicted values
+- `sd` is the estimated standard deviation
+
+Notice also that we have chosen `log=TRUE`; this way
+we can get the joint likelihood by summing the
+likelihoods for each of the data points.  
+
+Also notice that we multiply the sum of the log likelihoods
+by `-1` because we want the __Maximum__ likelihood.  By
+default, the optimizers find the __Minimum__ of the
+function that you supply.
+
+```{r}
+theta <- c(beta0=10, beta1=10, sigma=1)
+```
+
+
+
+We can find the minimum of this function
+by using `stats::optim`
+
+```{r}
+set.seed(10011)
+linear_ml
+
+fit.ml <- optim(theta, linear_ml, data=data, method="SANN")
+
+fit.ml$par
+
+coef(fitt)
+```
+
+<hr><div class = spacer></div>
+
+# Constrained or transformed parameters
+
+This is especially true for the `sigma` parameter
+(we know the variance must be greater than zero).  
+But once we get to estimating clearances and
+volumes, we also need to contrain those to be
+positive.
+
+To do this, we transform the initial estimate
+for each parameter, and then untransform
+the values inside the `linear_ml` function.
+
+```{r}
+linear_ml_log <- function(p, data) {
+  p2 <- exp(p)
+  y.hat <- p2[1] + p2[2]*data$x
+  -1*sum(dnorm(data$y,y.hat,p2[3],log=TRUE))
+}
+
+theta.log <- log(c(beta0=10,beta1=10,sigma=1))
+```
+
+
+We can find the minimum of this function
+by using the simulated annealing
+algorithm in `stats::optim`
+
+```{r}
+set.seed(10011)
+fit.ml.log <- optim(theta.log, linear_ml_log, data=data, method="SANN")
+
+fit.ml.log
+```
+
+
+Now, the final estimates are on log scale
+
+```{r}
+fit.ml.log$par
+```
+
+
+
+We will have to untransform them
+
+```{r}
+exp(fit.ml.log$par)
+```
+
+
+And the log-scale estimation is still on target:
+
+```{r}
+tidy(fitt)
+```
+
+<hr><div class = spacer></div>
+
+# Get standard errors for the estimates
+
+This varies from optimizer to optimizer. We'll
+provide some examples here to get you started.
+
+`stats::optim` has a `hessian` argument.  If `TRUE`,
+you'll get that matrix in the ouput.
+
+To demonstrate this, we have to go back
+to the maximum likelihood example to
+get standard errors that compare with
+those generated with `lm`:
+
+
+```{r}
+theta <- c(beta0=10,beta1=10,sigma=1)
+
+fit <- optim(theta, linear_ml, data=data, hessian=TRUE)
+```
+
+By specifying `hessian=TRUE`, `stats::optim` will include that matrix in the
+output
+
+```{r}
+fit$hessian
+```
+
+
+This hessian is the inverse covariance matrix of the
+estimate.  In order to generate standard errors,
+we must invert this matrix and take the square-root:
+
+```{r}
+se <- sqrt(diag(solve(fit$hessian)))
+```
+
+
+Notice that we only take the on-diagonal elements here ... off diagonals
+might be negative which would generate a complaint from `sqrt`
+
+Standard errors from `stats::optim`
+```{r}
+se
+```
+
+
+Standard errors from `lm`
+```{r}
+tidy(fitt)
+```
+
+
+You can also use the `numDeriv` package to generate
+that hessian matrix on your own.  
+
+After fitting the model, pass the
+objective function and the final estimates
+into the `hessian` function provided by `numDeriv`
+
+
+```{r}
+hes <- numDeriv::hessian(linear_ml, fit$par, data=data)
+sqrt(diag(solve(hes)))
+```
+
+Again, this matches up well with what we got from `lm`
+```{r}
+tidy(fitt)
+```
+
+<hr><div class = spacer></div>
+
+# Your turn
+
+The pre-clinical team has validated an *in vitro*
+assay for the development program that you
+are supporting.  They have sent you this data set for analysis.
+
+After performing some graphical data analysis,
+propose a model and generate estimates with standard errors to
+report back to the team.
+
+```{r}
+data <- readRDS(config::get("fit_01_hands"))
+```
+
+<hr><div class = spacer></div>

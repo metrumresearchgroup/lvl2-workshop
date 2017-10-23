@@ -1,0 +1,263 @@
+---
+title: "Annotated model specification"
+author: "Metrum Research Group, LLC"
+date: ""
+output: 
+  html_document:
+    toc: true
+    css: docs/src/styles/styles.css
+---
+
+```{r,echo = FALSE}
+knitr::opts_chunk$set(comment='.', warning = FALSE, message = FALSE)
+```
+
+
+# Introduction
+
+Annotated model specification is an alternate format for selected 
+blocks in the model specification file. 
+
+The "annotated" block allows the user to enter an extended 
+set of information about selected model elements and also 
+allows the user to create a summary of the model contents 
+based on that extended data set.
+
+## What can be annotated
+
+- Parameters
+- Compartments and initial condtions
+- Output variables
+- Problem summmary
+
+
+# Annotated parameter block
+
+Let's start with an annotated parameter block to introduce the 
+different formatting considerations.
+
+The __standard__ paramater block looks like
+```{c, eval = FALSE}
+$PARAM CL = 1, VC = 2, KA = 3
+```
+
+The format is: `name = value`.  It would be nice if 
+we could also include a brief description of the 
+parameter as well as the unit.
+
+The equivalent parameter block in __annotated__ format would be
+```{c, eval = FALSE}
+$PARAM @annotated
+CL : 1 : Clearance (L/hr)
+VC : 2 : Volume of distribution (L)
+KA : 3 : Absorption rate constant (1/hr)
+```
+
+
+__Of note__:
+
+1. We still use the `$PARAM` block identifier to specify the parameters
+1. We also use the `@annotated` directive to identify that the block 
+is in annotated format.
+1. For each parameter, specify the:
+    * parameter name (`CL`)
+    * colon
+    * parameter value (`1`)
+    * colon
+    * parameter decription (`Clearance`)
+    * parameter unit (`(L/hr)`)
+1. In the __standard__ specification, we could put multiple parameters 
+on the same line; in the __annotated__ specification, each parameter 
+needs its own line
+  
+## Unit specification 
+
+The parameter unit is found inside the __last__ set of parentheses
+found on the specification line. 
+
+So you could do this
+```{c,eval = FALSE}
+$PARAM @annotated
+CL : 1 : Clearance (healty volunteers) (L/hr)
+```
+
+If you don't want a unit either don't write anything 
+```{c,eval = FALSE}
+$PARAM @annotated
+F1 : 1 : Bioavailability fraction
+```
+
+or put in a "no-value" value; `mrgsolve` uses a `.` to hold the value
+
+```{c,eval = FALSE}
+$PARAM @annotated
+F1 : 1 : Bioavailability fraction (tablet) (.)
+```
+
+# Compartments
+
+Recall that we can specify compartments with either
+
+* `$CMT name1 name2` just lists the compartment names, assumes values are 0
+* `$INIT name1 = value1, name2 = value2` give the name and value
+an `$INIT` block.  
+
+To annotate `$CMT`
+
+```{c, eval = FALSE}
+$CMT @annotated
+DEPOT   : SC dosing compartment (nmol)
+CENTRAL : Central compartment (nmol)
+```
+
+__Of note__:
+
+1. All of the details that we discussed for `$PARAM` hold for `$CMT`
+1. __Except__ we omit the value of the compartment (consistent with 
+what we do in the __standard__ specification
+
+To annotate `$INIT`
+
+```{c,eval = FALSE}
+$CMT @annotated
+DEPOT   : 0 : SC dosing compartment (nmol)
+CENTRAL : 0 : Central compartment (nmol)
+```
+
+__Of note__:
+
+1. The same as `$CMT` except we __do__ include __value__
+1. All elements are analgous to what we discussed for `$PARAM`
+
+
+# Annotate output variables
+
+Recall that we can derive numeric values in the model code and mark 
+those values to be included in the simulated __output__
+
+For example
+```{c,eval = FALSE}
+$TABLE
+double CP = CENT/VC;
+
+$CAPTURE CP
+```
+
+We can make an annotated version of the `$CAPTURE` block like this
+
+```{c, eval=FALSE}
+$CAPTURE @annotated
+CP : Concentration (ng/mL)
+```
+
+Like `$CMT`, `$CAPTURE` only takes the names of the items 
+to be included in the output.  So we construct the __annotated__
+specification blocks with the `name : description (unit)` format.
+
+
+# Problem specification
+
+There is a block in the `mrgsolve` specification where we can include 
+details about the model run.  Frequently, we include a short description
+of the run. 
+
+```{c, eval = FALSE}
+$PROB 
+Final PK model run
+```
+
+
+In the annotated approach, we can include information in markdown 
+format
+
+```{c,eval = FALSE}
+$PROB
+- Summary: PK model run
+- Covariates: Weight, CLCR
+- Random effects:
+    - CL: exponential
+    - VC: exponential
+- Error model: combined
+- Derived from: run 1002
+```
+
+
+
+
+# Extract model details 
+
+When we do follow an annotated model specification format, we can 
+extract that information from the model object
+
+```{r}
+code <- '
+$PARAM @annotated
+A : 2 : first parameter (ng)
+B : 5 : second parameter (kg)
+
+$CMT @annotated
+DEPOT : Dosing compartment
+CENTRAL : Central compartment
+
+$TABLE
+double C = 10;
+double D = 20;
+
+$CAPTURE @annotated
+C : Equals 10 (kg/m2)
+D : Equals 20 (dL)
+'
+
+library(mrgsolve)
+mod <- mcode("foo", code)
+```
+
+
+Use `mrgsolve:::details` to extract the information
+
+```{r}
+mrgsolve:::details(mod)
+```
+
+The `mrgsolve:::details` function returns a data frame that tells you the 
+
+* block
+* name
+* description
+* value
+* unit
+
+where applicable for each annotated item
+
+
+# Render the document
+```{r,eval}
+mod <- mread("irm1", modlib())
+
+mrgsolve:::details(mod)
+```
+
+
+Use `mrgsolve:::render` to create a document out of the model.
+
+```{r, eval = FALSE, message = FALSE}
+mrgsolve:::render(mod)
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

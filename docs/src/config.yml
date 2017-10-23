@@ -1,0 +1,20 @@
+default:
+  mero_project: "../devmodels/meropenem"
+  mero_datafile: "../devmodels/meropenem/Simulated_DatasetMeropenem.csv"
+  mero_partab: "../devmodels/meropenem/1001/patab"
+  az_project: "../../../devmodels/azithro"
+  az_model: azithro
+  az_datafile: "../../../devmodels/azithro/covariate.RDS"
+  epo_project: "../devmodels/epo"
+  epo_datafile: "../devmodels/epo/Simulated_EPO_dataset.csv"
+  linear_data: "../../data/linear.RDS"
+  fit_01_hands: "../../data/fit_your_turn.RDS"
+  functions: "../../functions.R"
+  map_project: "../../model"
+  fit_03_data: "../../../devmodels/ddi/fig4a.csv"
+  ddi_project: "../../../devmodels/ddi"
+  mapk_data: "../../../cic-2017/content/data/s10vpop.csv"
+  mapk_project: 
+  
+
+

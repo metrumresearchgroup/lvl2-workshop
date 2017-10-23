@@ -1,0 +1,220 @@
+---
+title: Meropenem Target Attainment in Adults
+output: 
+  html_document:
+    css: docs/src/styles/styles.css
+---
+
+
+
+# Introduction
+
+- "Population Pharmacokinetic Analysis and Dosing Regimen Optimization of Meropenem in Adult Patients"
+    - Li et al. J Clin Pharmacol 2006
+- Meropenem is broad-spectrum carbapenem antibiotic
+    - Efficacy related to time above MIC
+- IV dosing every 8 hours by infusion or bolus
+    - bolus over 3 to 5 minutes
+    - infusion over 15 to 30 minutes
+- Authors are interested in seeing if a longer infusion duration 
+can increase time above MIC
+- In this vignette, we'll try to look at probability of target attainment for 
+different infusion times and different MIC values
+
+
+# Packages
+```{r, message = FALSE}
+source("libPaths.R")
+library(mrgsolve)
+library(dmutate)
+library(magrittr)
+library(dplyr)
+library(readr)
+
+a <- config::get()
+source(a$functions)
+knitr_config()
+
+set.seed(11000011)
+```
+
+
+# Load the `meropenem` model
+```{r}
+mod <- mread("meropenem", a$mero_project)
+mod
+```
+
+- The model was obtained from DDMoRe model repository
+  - http://repository.ddmore.foundation/model/DDMODEL00000213
+  - We took the model code as-is
+  
+```{r}
+blocks(mod, MAIN)
+```
+
+- The covariates are: WT, AGE, CLCR
+
+# Read in the meropenem data set
+```{r}
+data <- 
+  read_csv(a$mero_datafile,na='.')  %>% 
+  mutate(CMT=1, DUR = round(AMT/RATE,1))
+```
+
+- Infusion durations of 0.5 and 3 hours
+- 79 total subjects
+
+```{r}
+data %>% filter(EVID==1) %>% count(DUR)
+```
+
+
+What do we need?
+ 
+- 1 g Q8h, duration 0.5, 1, 2, 3 hr
+- Time > mic at ss (40 <= time <= 48)
+- N=100 simulated sets of 79 patients (presumably the original population)
+
+
+First, get the population set up
+
+- From the publication, it it appears they simulated the studied patients
+100 times
+- We don't quite have all the information we need here.  For now, I'm going 
+to re-sample 7900 patients from the original data set and simulate
+some of the remaining covariates
+
+- Re-sample our population
+
+```{r}
+ids <- 1:7900
+
+id <- distinct(data, ID, WT, CLCR, AGE) %>% ungroup
+
+set.seed(11020)
+id <- sample_n(id, max(ids), replace=TRUE) %>% mutate(ID = 1:n())
+```
+
+
+- We need to simulate some covariates here
+```{r}
+count(data, CLCR)
+```
+
+
+- Simulate `SCR` and `SEX`
+
+```{r}
+cov1 <- covset(SCR[0.4,6.9] ~ rnorm(1,0.8), SEX ~ rbinomial(0.95))
+
+id %<>% mutate_random(cov1)
+```
+
+- Then calculate `CLCR`
+
+```{r}
+id %<>% mutate(CLCR = 0.85^(SEX==1)*(140-AGE)*WT/(SCR*72))
+```
+
+
+Make a dosing data frame
+
+- For this, the authors only consider the 1g Q8H dose
+
+```{r}
+durations <- c(0.5, 1, 2, 3)
+
+data <- expand.ev(amt = 1000, ii = 8, addl = 5, 
+                  ID = ids, dur = durations)
+
+data <- mutate(data, 
+               ID = rep(ids, times = length(durations)), 
+               rate = amt/dur)
+
+data <- left_join(data,id) %>% mutate(ID0 = ID, ID = 1:n())
+```
+
+
+- Create a `tgrid` object covering 40 to 48 hours
+- It's usually worth doing this ... getting only the times that 
+you really want to analyze
+
+```{r}
+des <- tgrid(0,8,0.1) + 5*8
+
+stime(des)
+```
+
+
+# Simulate from our data set
+
+```{r}
+out <- 
+  mod %>% 
+  data_set(data) %>% carry_out(dur) %>%
+  mrgsim(tgrid = des, obsonly = TRUE)
+```
+
+
+# Work ou the code to summarize for a single `MIC`
+
+- Summarize for `MIC==4`
+- Subtract 40 from time
+- group by `ID` and `dur`
+- Calculate fraction of the interval above the `MIC`
+
+```{r}
+mic <- 4
+sum <- 
+  out %>% 
+  mutate(time = time - 40) %>%
+  group_by(ID,dur) %>%
+  mutate(TMIC = first(time[Y < mic & time > 0.5 ])) %>%
+  mutate(fmic = TMIC/8, fmic = ifelse(is.na(fmic),1,fmic)) %>% 
+  ungroup %>% 
+  distinct(ID,dur,fmic) %>%
+  group_by(dur) %>%
+  summarise(PR = mean(fmic >= 0.4))
+sum
+```
+
+# Write come code to analyze all `MIC` of interest
+
+```{r}
+mic <- c(0.064, 0.128, 0.256, 0.512, 
+         1, 2, 4, 8, 16, 32, 64)
+```
+
+
+- Take the above code and wrap in a function
+- Be sure to save the value for `mic` as well as the duration
+
+```{r}
+smry <- function(mic, out) {
+  out %>% 
+  mutate(time = time - 40) %>%
+  group_by(ID,dur) %>%
+  mutate(TMIC = first(time[Y < mic & time > 0.5 ])) %>%
+  mutate(fmic = TMIC/8, fmic = ifelse(is.na(fmic),1,fmic)) %>% 
+  ungroup %>% 
+  distinct(ID,dur,fmic) %>%
+  group_by(dur) %>%
+  summarise(PR = mean(fmic >= 0.4)) %>%
+  mutate(mic = mic)
+}
+```
+
+## Summarize by different `MIC`
+```{r}
+sum <- parallel::mclapply(mic, mc.cores = 8, smry, out = out)
+sum <- bind_rows(sum)
+```
+
+# Plot the results
+```{r}
+ggplot(data = sum, aes(factor(mic), PR, group = dur, shape = factor(dur))) + 
+  geom_line() + geom_point()
+```
+
+

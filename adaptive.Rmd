@@ -1,0 +1,219 @@
+---
+title: Simulate dose titration in the model
+author: Metrum Research Group, LLC
+output:
+  html_document:
+    css: styles/styles.css
+    toc: true
+    number_sections: true
+    footer: metrumrg &copy 2017
+---
+```{r,echo = FALSE}
+knitr::opts_chunk$set(comment='.', message = FALSE, warning = FALSE)
+```
+
+
+# The model
+
+- One-compartment with extravascular absorption
+    - CL = 1, VC = 20, KA = 1.2
+    - No IIV
+- Direct link Emax model
+    - E0 = 100, Emax = 60, EC50 = 25
+    - 30% IIV on EC50 and 10% IIV on E0
+
+# The titration scheme
+
+- Everyone gets 100 mg q12h for a week
+- After that, start monitoring the trough response and adjust doses 
+according to a dosing protocol
+    - `118 < RESP < 122` keep the dose the same
+    - `122 <  RESP < 150` decrease by 20%
+    - `RESP > 150` decrease by 40%
+    - `105 < RESP < 118` increase by 30%
+    - `RESP < 105` double the dose 
+- Implement the titration protocol for six weeks and 
+summarize baseline and final response at week 10
+
+# To investigate
+
+- Summarize the distribution of final responses relative 
+to baseline responses both with and without the dose titration
+scheme in play
+
+## A twist to try out
+
+- Instead of adjusting the dose based on the trough response,
+try adjusting the dose based on the mean of the last 
+3 daily response measurements
+
+# Setup 
+
+```{r}
+library(mrgsolve)
+library(dplyr)
+library(ggplot2)
+library(tidyr)
+```
+
+
+We have written more code
+
+
+```{r}
+code <- '
+$SET req = ""
+
+$GLOBAL
+double F1  = 1;
+
+double adjust(double resp, double F1) {
+  if(resp > 118 && resp < 122) return F1;
+  if(resp > 122 && resp < 150) return F1 * 0.8;
+  if(resp > 150) return F1 * 0.6;
+  if(resp > 105 && resp < 118) return F1 * 1.3;
+  if(resp < 105) return F1 * 2;
+  return F1;
+}
+
+bool tta(double time, double evid, double titr) {
+  if(titr !=1 || evid !=0 ) return false;
+  return  (time/168 == floor(time/168)) && time > 7*24 && time <= 7*7*24;
+}
+
+$PARAM 
+TVCL = 1, V = 20, KA = 1.2, 
+TVEC50 = 20, TVE0 = 100
+TITR = 1
+
+$PKMODEL cmt = "GUT CENT", depot = TRUE
+
+$OMEGA 0 0.09 100
+
+$MAIN 
+
+if(NEWIND <=1 ) F1 = 1;
+double CL = TVCL*exp(ETA(1));
+double EC50 = TVEC50*exp(ETA(2));
+double E0 = TVE0 + ETA(3);
+
+F_GUT = F1;
+
+$TABLE
+capture CP = CENT/V;
+capture RESP = E0 + 60*CP/(EC50+CP);
+
+if(tta(TIME,EVID,TITR)) F1 = adjust(RESP,F1); 
+
+capture F1out = F1;
+
+'
+```
+
+
+The simulation duration
+```{r}
+dur <- 10*7*24
+```
+
+
+```{r}
+mod <- 
+  mcode("foo", code) %>% 
+  update(end = dur) %>% 
+  ev(amt=100, ii=12, addl=2*10*7)
+
+mod <- param(mod, TITR = 1)
+```
+
+
+## Simulate 50 individuals
+
+```{r}
+set.seed(102214)
+out <- mrgsim(mod, nid = 50, delta = 2, obsonly = TRUE)
+plot(out)
+```
+
+
+## Summarize the simulations
+
+- Just get the rows at baseline and at the end
+- Derive a `variable` column for plotting
+
+```{r}
+sum <- 
+  filter(out, time %in% c(0,dur)) %>% 
+  group_by(ID) %>% mutate(variable = c("Baseline", "Week 10"))
+```
+
+```{r}
+ggplot(data=sum) + 
+  geom_density(aes(x=RESP, fill=variable), alpha = 0.6)
+```
+
+```{r}
+set.seed(102214)
+out <- 
+  mod %>% param(TITR = 0) %>% 
+  mrgsim(nid = 50, delta = 1, obsonly = TRUE)
+
+plot(out)
+```
+
+
+```{r}
+sum <- 
+  filter(out, time %in% c(0,dur)) %>% 
+  group_by(ID) %>% mutate(variable = c("Baseline", "Week 10"))
+```
+
+```{r}
+ggplot(data=sum) + 
+  geom_density(aes(x=RESP, fill=variable), alpha = 0.6)
+```
+
+
+# Another approach
+
+- Keep the code in file `adaptive.h` in the `project` directory
+- in `$GLOBAL`, create an object for tracking history
+- A `reset` method gets called at the start of the problem
+and at the start of every individual
+- At the right time, we can save some information
+and get at that information as well as other historical 
+information
+
+```{r}
+code <- '
+$INCLUDE adaptive.h
+
+$GLOBAL
+hx obj;
+
+$PREAMBLE 
+obj.reset();
+
+$CMT A
+
+$ODE dxdt_A = -0.5*A;
+
+$MAIN 
+if(NEWIND <= 1) obj.reset();
+
+$TABLE
+obj.save(A);
+
+capture previous = obj.previous();
+capture current = obj.current();
+
+'
+```
+
+```{r}
+mod <- mcode("foo", code, project = 'model', soloc = '.')
+
+mrgsim(init(mod, A = 100))
+```
+
+

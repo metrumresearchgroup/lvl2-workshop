@@ -1,0 +1,300 @@
+---
+title: "Generate MAP Bayes Parameter Estimates"
+output: 
+  html_document:
+    css: docs/src/styles/styles.css
+    toc: true
+    number_sections: true
+---
+
+```{r,echo=FALSE}
+knitr::opts_chunk$set(comment='.',message=FALSE, warning=FALSE)
+```
+
+# Objective
+
+This vignette will illustrate how to do MAP Bayes estimation with `mrgsolve`.  
+The setup was adapted from an existing project, where only a single
+individual was considered.  With some additional `R` coding, it could be expanded 
+to consider multiple individuals in a single run.
+
+# Packages
+
+```{r}
+library(ggplot2)
+library(mrgsolve)
+library(minqa)
+library(dplyr)
+library(magrittr)
+```
+
+# One compartment model, keep it simple for now
+
+* The model specification code below is for a one-compartment model,
+where `mrgsolve` will calculate the amount in `CENT` from closed-form
+equations
+
+* For now, `$OMEGA` and `$SIGMA` are filled with zeros; we'll 
+update it later
+
+* The control stream is set up so that we can either simulate
+the etas or pass them in.  `ETA(1)` and `ETA(2)` are the etas
+that `mrgsolve` will draw from `$OMEGA`.  `ETA1` and `ETA2` 
+are fixed and known at the time of time of the simulation.  The 
+optimizer will search for values of `ETA1` and `ETA2` that 
+optimize the objective function.  Note that `ETA1` and `ETA2` must
+be in the parameter list for this to work
+
+* We do a trick where `CL=TVCL*exp(ETA1+ETA(1));`  The assumption
+is that either `ETA1` (simulating) is zero or `ETA(1)` is zero (estimating)
+
+* We table out `ETA(1)` and `ETA(2)` so we can know the true
+(simulated) values (but not both zero and not both non-zero)
+
+* `DV` is output as a function of `EPS(1)`; this will be zero until
+we add in values for `$SIGMA`.  But when we're estimating,
+we need to make sure that `EPS(1)` is zero; the prediction 
+shouldn't have any randomness in it (just the individual prediction based
+on known etas)
+
+```{r}
+
+code <- '
+$SET request=""
+
+$PARAM TVCL=1.5, TVVC=23.4, ETA1=0, ETA2=0
+
+$PKMODEL cmt = "CENT"
+
+$OMEGA 0 0
+
+$SIGMA 0
+
+$MAIN
+double CL = TVCL*exp(ETA1 + ETA(1));
+double V =  TVVC*exp(ETA2 + ETA(2));
+
+$TABLE 
+capture DV = (CENT/V)*(1+EPS(1));
+capture ET1 = ETA(1);
+capture ET2 = ETA(2);
+'
+
+mod <- mcode("map", code)
+```
+
+
+# First, simulate some data
+
+`$OMEGA` and `$SIGMA`; 
+
+* The result may look better or worse depending 
+on what we choose here
+* These will be used to both simulate and fit the data
+* The `cmat` call makes a `2x2` matrix where the off-diagonal
+is a correlation (`?cmat`).
+ 
+```{r}
+omega <- cmat(0.23,-0.78, 0.62)
+omega.inv <- solve(omega)
+sigma <- matrix(0.0032)
+```
+
+
+Just a single dose to `CENT` with an events object
+```{r}
+dose <- ev(amt=750,cmt=1)
+```
+
+Take these times for concentration observations
+```{r}
+sampl <- c(0.5,12,24)
+```
+
+
+Simulate 
+
+* Here, we're populating `$OMEGA` and `$SIGMA` so that the
+simulated data will be random
+* It is important to `carry.out` all of the items that we will need
+in the estimation data set (doses, evid, etc)
+* Using `end=-1` with `add=sampl` makes sure that we only 
+get observation records at the times listed in `sampl`
+
+
+```{r}
+set.seed(1012) 
+sim <- 
+  mod %>%
+  ev(dose) %>%
+  omat(omega) %>%
+  smat(sigma) %>%
+  carry.out(amt,evid,cmt) %>%
+  mrgsim(end=-1, add=sampl)
+
+sim
+```
+
+
+# Create input for optimization
+
+* Using the simulated data as the starting point here
+
+```{r}
+sim %<>% as.data.frame
+```
+
+Observed data (`y`)
+
+* Just select `DV` from observation records
+```{r}
+y <- sim %>% dplyr::filter(evid==0) %>% dplyr::select(DV) %>% unlist %>% unname
+
+y
+```
+
+Create a data set to use in the optimization
+
+* We need to drop `ET1` and `ET2` since they are in the
+parameter list
+
+```{r}
+data <- sim %>% dplyr::select(-ET1, -ET2)
+data
+```
+
+
+
+# Optimize
+
+This function takes in a set of proposed $\eta$s along with 
+the observed data vector, the data set and a model object and returns
+the value of the EBE objective function
+
+* When we do the estimation, the fixed effects and random effect
+variances are fixed.  
+
+* The estimates are the $\eta$ for clearance and volume
+
+Arguments: 
+
+* `eta` the current values from the optimizer
+* `y` the observed data
+* `d` the data set that generated `y`
+* `m` the model object
+* `pred` if `TRUE`, just return predicted values
+
+
+## What is this function doing?
+
+1. get the matrix for residual error
+1. Make sure `eta` is a list
+1. Make sure `eta` is properly named (i.e. `ETA1` and `ETA2`)
+1. Copy `eta` into a matrix that is one row
+1. Update the model object (`m`) with the current values of `ETA1` and `ETA2`
+1. If we are estimating (`!pred`), request only observations in the output (`obsonly`)
+1. Simulate from data set `d` and save output to `out` object
+1. If we are just requesting predictions (`if(pred)`) return the simulated data
+1. The final lines calculate the EBE objective function; see [this paper](http://www.ncbi.nlm.nih.gov/pmc/articles/PMC3339294/) for reference
+1. Notice that the function returns a single value (a number); the optimizer
+will minimize this value
+
+```{r}
+mapbayes <- function(eta,y,d,m,pred=FALSE) {
+    
+  sig2 <- as.numeric(sigma)
+  
+  eta %<>% as.list
+  
+  names(eta) <- names(init)
+  
+  eta_m <- eta %>% unlist %>% matrix(nrow=1)
+  
+  m %<>% param(eta)
+  
+  if(!pred) m %<>% obsonly
+  
+  out <- m %>% drop.re() %>% data_set(d) %>% mrgsim
+  
+  if(pred) return(out %>% as.tbl)
+  
+  # http://www.ncbi.nlm.nih.gov/pmc/articles/PMC3339294/
+  
+  sig2j <- out$DV^2*sig2
+  
+  sqwres <- log(sig2j) + (1/sig2j)*(y-out$DV)^2
+  
+  nOn <- diag(eta_m %*% omega.inv %*% t(eta_m))
+  
+  return(sum(sqwres) + nOn)
+
+}
+```
+
+
+## Initial estimate
+
+* Note again that we are optimizing the etas here
+
+```{r}
+init <- c(ETA1=-0.3, ETA2=0.2)
+```
+
+Fit the data
+
+* `newuoa` is from the `minqa` package
+* Other optimizers (via `optim`) could probably also be used
+
+Arguments to `newuoa`
+
+* First: the initial estimates
+* Second: the function to optimize
+* The other argument are passed to `mapbayes`
+
+```{r}
+fit <- newuoa(init, mapbayes, y=y, m=mod, d=data)
+```
+
+
+Here are the final estimates
+```{r}
+fit$par
+```
+
+Here are the simulated values
+```{r}
+slice(sim,1) %>% dplyr::select(ET1, ET2)
+```
+
+
+# Look at the result
+
+A data set and model to get predictions; this will 
+give us a smooth prediction line
+
+```{r}
+pdata <- data %>% filter(evid==1)
+pmod <- mod %>% update(end=24, delta=0.1) 
+```
+
+Predicted line based on final estimates
+```{r}
+pred <- mapbayes(fit$par, y, pdata, pmod, pred=TRUE) %>% filter(time > 0)
+head(pred)
+```
+
+Predicted line based on initial estimates
+```{r}
+initial <- mapbayes(init,y,pdata,pmod,pred=TRUE) %>% filter(time > 0)
+head(initial)
+
+```
+
+
+Plot
+```{r}
+ggplot() + 
+  geom_line(data=pred, aes(time,DV),col="firebrick", lwd=1) + 
+  geom_line(data=initial,aes(time,DV), lty=2, col="darkgreen", lwd=1) + 
+  geom_point(data=data %>% filter(evid==0), aes(time,DV), col="darkslateblue",size=3)
+```

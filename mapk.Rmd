@@ -1,0 +1,310 @@
+---
+title: "MAPK"
+author: "Metrum Research Group, LLC"
+date: ""
+output: 
+  html_document:
+    css: docs/src/styles/styles.css
+    toc: true
+    number_sections: true
+---
+
+```{r,echo=FALSE}
+knitr::opts_chunk$set(comment='.', message=FALSE, warning=FALSE, fig.width=8)
+```
+
+__Clinical responses to ERK inhibition in BRAF{V600E}-mutant colorectal cancer predicted using a computational model__
+
+- Daniel C. Kirouac, Gabriele Schaefer, Jocelyn Chan, Mark Merchant, Christine Orr, Shih-Min A. Huang, John Moffat, Lichuan Liu, Kapil Gadkar and Saroja Ramanujan
+
+- npj Systems Biology and Applications  (2017) 3:14 
+
+- https://www.ncbi.nlm.nih.gov/pubmed/28649441
+
+```{r}
+a <- config::get()
+library(mrgsolve)
+library(readr)
+library(purrrlyr)
+library(purrr)
+library(dplyr)
+library(dmutate)
+library(ggplot2)
+library(magrittr)
+source("src/functions.R")
+set.seed(889110)
+```
+
+```{r}
+mod <- mread("mapk", "model")
+```
+
+
+
+# Read in the VPOP data set provided by the authors
+
+- This is the data file that came with the publication
+```{r}
+data.file <- file.path("data", "s10vpop.csv")
+```
+
+- Just sample 250 rows, with the weights provided in the `PW` column
+```{r}
+set.seed(1001100)
+vp <- read_csv(data.file) %>% sample_n(250, weight=PW, replace=TRUE)
+```
+
+Since we sampled with replacement, let's add a new VPOP column that is unique per row
+```{r}
+vp %<>% mutate(VPOP2 = 1:n())
+```
+
+
+# Read in PK parameters 
+
+- There are a lot of compounds to deal with
+- I've arranged the PK parameters in a list that will help keep us compatible with `dmutate`
+```{r}
+source("src/objects.R")
+
+names(pki)
+
+pki$cl1
+```
+
+# Use `dmutate` package to simulate PK parameters
+
+- Simulate from a multivariate normal distirbution, one per unique `VPOP2`
+- These parameters are for `RAFi`
+```{r}
+cov2 <- cl2 + ka2 + V2 ~ rlmvnorm(log(c(cl2,ka2,V2)),iiv_vemu) | VPOP2
+```
+
+- Similar deal for `MEKi` and `ERKi`
+```{r}
+cov3 <- cl3 + ka3 + q2 + V3 + V3b ~ 
+  rlmvnorm(log(c(cl3,ka3,q2,V3,V3b)),iiv_cobi) | VPOP2
+
+cov4 <- cl4 + ka4 + V4 ~ 
+  rlmvnorm(log(c(cl4,ka4,V4)),iiv_gdc) | VPOP2
+```
+
+- We collect these objects in to a `covset` ... 
+```{r}
+cov_set <- covset(cov2,cov3,cov4)
+```
+
+- And we can mutate the `vp` data set to add the simulated PK values
+```{r}
+vp %<>% mutate_random(cov_set, envir = pki)
+```
+
+- Derive the rate constants; we must do this matching names in the model
+```{r}
+vp %<>% mutate(ke2 = cl2/V2, ke3 = cl3/V3, ke4 = cl4/V4)
+```
+
+
+Now, split up the Vpop in to a list that we can use to simulate
+```{r}
+l <- split(vp, vp$VPOP2)
+```
+
+# Create all mono-tx regimens that we will need to address 
+
+- Nothing
+```{r}
+data0 <- expand.ev(amt=0, cmt=8)
+```
+
+- BFRAF-i CMT 8  - vemurafanib VEMU
+- VEMU_dose = 960;    %mg, BID
+```{r}
+cmtn(mod, "RAFi_gut")
+dataV <- expand.ev(amt=960, cmt=8, ii=0.5, addl=120)
+```
+
+- ERKi CMT 12 - GDC-0994 
+- GD ERKI_dose = 400;    %mg, daily 3/1
+```{r}
+cmtn(mod, "ERKi_gut")
+
+dataG <- 
+  expand.ev(amt=400, cmt=12, time=c(0,28), ii=1, addl=20) %>% 
+  mutate(ID=1)
+
+dataG
+```
+
+- Another way to make this regimen
+```{r}
+e <- ev(amt = 400, cmt = 12, ii = 1, addl = 20, ID = 1)
+
+datag <- ev_repeat(e, n = 2, wait = 7)
+```
+
+- Give it a test
+- This plot shows the trough concentration versus time 
+```{r}
+out <- mrgsim(mod, data=datag, end=56)
+plot(out, ERKi~time)
+```
+
+
+- MEKi CMT 10 - cobimetinib COBI
+- COBI_dose = 60;     %mg, daily
+```{r}
+cmtn(mod,"MEKi_gut")
+dataCO <- mutate(dataG, amt=60, cmt=10)
+```
+
+- RTK1i / EGFRi CMT 7 - cetuximab CETUX
+- CETUX_dose = 450;   %mg, weekly
+```{r}
+cmtn(mod, "RTK1i_blood")
+
+dataCE <- data_frame(time=0, cmt=7, ii=7, addl=7, evid=1, ID=1, amt=450)
+```
+
+# A function that combines two or more regimens
+
+- We already have all of the individual regimens
+- The function combines any number of regimens that we
+pass in to create the combinations
+
+```{r} 
+comb <- function(...) {
+  bind_rows(list(...)) %>% dplyr::arrange(time)
+}
+```
+
+- Try combining the cetuximab and vemurafanib regimens
+```{r}
+comb(dataCE, dataV)
+```
+
+
+```{r}
+mod %>% 
+  mrgsim(data = comb(dataCE,dataV), end = 14, delta = 0.1) %>%
+  plot(RTK1i_blood + RAFi_blood + TUMOR ~ time)
+```
+
+
+# The simulation function
+
+- This function is designed to let us simulate from one element in the 
+`vpop` list
+- We pass in one row from the `vpop` data set, update parameters 
+and initial conditions, and simulate with the data set that was also passed in
+
+
+```{r}
+sim <- function(x, Data) {
+  mod %>%
+    param(x) %>%
+    init(x) %>% 
+    Req(TUMOR) %>%
+    mrgsim(data=Data, end=56, delta=0.25) %>%
+    filter(time==56)
+}
+```
+
+- I frequently also create a function that will simulate the 
+whole list of stuff
+- So `siml` calls `sim` for each position in the list
+- This is also a good place to do some post-processing or modification 
+of the output with some information that we might need later
+
+```{r}
+siml <- function(data) {
+  parallel::mclapply(l, mc.cores=8, function(x) {
+    sim(x,Data=data) %>% 
+      mutate(VPOP2=x$VPOP2,VPOP=x$VPOP)
+  }) %>% bind_rows
+}
+```
+
+
+# Simulate all of the regimens
+
+- I'm going with brute-force approach here
+- Maybe more elegant approach is possible
+- But often brute-force is more flexible, easier to debug,  or 
+easier to re-do this or that scenario
+
+
+## Monotherapy
+```{r}
+sim1 <- siml(data0 ) %>% mutate(label=1)
+sim2 <- siml(dataCE) %>% mutate(label=2)
+sim3 <- siml(dataV ) %>% mutate(label=3)
+sim4 <- siml(dataCO) %>% mutate(label=4)
+sim5 <- siml(dataG ) %>% mutate(label=5)
+```
+
+## 2-drug combinations
+```{r}
+sim23 <- comb(dataCE, dataV)  %>% siml %>% mutate(label=23)
+sim24 <- comb(dataCE, dataCO) %>% siml %>% mutate(label=24)
+sim25 <- comb(dataCE, dataG)  %>% siml %>% mutate(label=25)
+sim34 <- comb(dataV,  dataCO) %>% siml %>% mutate(label=34)
+sim35 <- comb(dataV,  dataG)  %>% siml %>% mutate(label=35)
+sim45 <- comb(dataCO, dataG)  %>% siml %>% mutate(label=45)
+```
+
+## 3-drug combinations
+```{r}
+sim234 <- comb(dataCE, dataV,  dataCO) %>% siml %>% mutate(label=234)
+sim235 <- comb(dataCE, dataV,  dataG)  %>% siml %>% mutate(label=235)
+sim245 <- comb(dataCE, dataCO, dataG)  %>% siml %>% mutate(label=245)
+sim345 <- comb(dataV,  dataCO, dataG)  %>% siml %>% mutate(label=345)
+```
+
+## All 4 drugs
+```{r}
+sim2345 <- comb(dataCE, dataV, dataCO, dataG) %>% siml %>% mutate(label=2345)
+```
+
+# Process and plot
+```{r}
+lab <- c("No TREAT", "CETUX", "VEMU", "COBI", "GDC",
+         "CETUX+VEMU", "CETUX+COBI", "CETUX+GDC", "VEMU+COBI","VEMU+GDC",
+         "COBI+GDC",
+         "CETUX+VEMU+COBI", "CETUX+VEMU+GDC", "CETUX+COBI+GDC", "VEMU+COBI+GDC",
+         "CETUX+VEMU+COBI+GDC")
+```
+
+```{r}
+sims <- bind_rows(sim1,sim2,sim3,sim4,sim5,sim23,sim24,sim25,sim34,
+                  sim35,sim45,sim234,sim235,sim245,sim345,sim2345)
+```
+
+```{r}
+ulab <- unique(sims$label)
+sims %<>% mutate(labelf = factor(label,levels=ulab,labels=as.character(ulab)))
+sims %<>% mutate(labelff = factor(label,levels=ulab,labels=lab))
+```
+
+
+```{r}
+p1 <- 
+  ggplot(data=sims) + 
+  geom_point(aes(x=labelff, y=TUMOR),position=position_jitter(width=0.15),col="grey") +
+  scale_y_continuous(limits=c(0,2.5),name="Tumor size",breaks=c(0,0.5,1,1.5,2,2.5,3)) +
+  scale_x_discrete(name="") + 
+  geom_hline(yintercept=0.7,col="firebrick", lty=1,lwd=1)  +
+  geom_boxplot(aes(x=labelff, y=TUMOR),fill="darkslateblue",col="darkslateblue",alpha=0.2) +
+  theme_plain() + rotx(30)
+```
+
+```{r}
+p1
+```
+
+
+```{r}
+pdf(file="all_treat_.pdf", width=8,height=4)
+p1
+dev.off()
+```

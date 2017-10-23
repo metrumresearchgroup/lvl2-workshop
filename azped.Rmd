@@ -1,0 +1,206 @@
+---
+title: "Pediatric dose evaluation"
+author: "Metrum Research Group, LLC"
+date: ""
+output: 
+  html_document: 
+    toc: true
+    css: docs/src/styles/styles.css
+    footer: metrumrg &copy 2017
+---
+
+```{r,echo=FALSE}
+knitr::opts_chunk$set(comment='.', message=FALSE, warning=FALSE)
+```
+
+# Packages
+
+- Loading some packages
+- Sourcing in some code in `functions.R`
+
+```{r}
+a <- config::get()
+source(a$functions)
+library(dplyr)
+library(ggplot2)
+library(mrgsolve)
+library(tidyr)
+```
+
+# Publication
+
+- Title: *Population pharmacokinetics of azithromycin and chloroquine in healthy adults and paediatric malaria subjects following oral administration of fixed-dose azithromycin and chloroquine combination tablets*
+- Authors: Qinying Zhao, Thomas G Tensfeldt, Richa Chandra, Diane R Mould
+- Reference: Malaria Journal 2014, 13:36
+
+## Conclusion
+"Weight was predictive of exposure for both AZ and CQ. Assuming equivalent dosing (mg/kg), AZ and CQ exposure in children would be expected to be lower than that in adults, suggesting that children may require a higher dose (mg/kg) than adults to achieve the same AZ and CQ exposure."
+
+
+## Our objective
+- Explore this conclusion through simulation
+- If we used the typical adult mg/kg dose in a pediatric population, 
+is the AUC really that different?  How much different?
+
+# Simulated ages and weight
+
+```{r}
+data <- readRDS(a$az_datafile) 
+
+head(data)
+```
+
+Derive a grouping variable based on `AGE`
+
+- 1 = `0.5 <= AGE < 5`
+- 2 = `5 <= AGE <= 12`
+- 3 = `AGE >= 18`
+
+```{r}
+data <- mutate(data, 
+               group = case_when( AGE >= 0.5 & AGE < 5 ~ 1, 
+                                  AGE >= 5 & AGE <= 12 ~ 2,
+                                  AGE >=18 ~ 3))
+
+data <- filter(data, !is.na(group))
+```
+
+
+# Azithrymycin dosing
+
+Modify this covariate data frame so that we have 
+
+- oral, bolus doses
+- daily dosing over 3 days
+
+```{r}
+data <- mutate(data, cmt=1, ii=24, addl=2, time=0, evid=1) %>% as_data_frame
+```
+
+* Sample 2000 subjects in each of the age groups
+
+```{r}
+data <- group_by(data, group) %>% sample_n(2000) %>% ungroup
+head(data)
+```
+
+Assign doses
+
+- For the pediatric cohorts, 300 mg if weight > 20 kg and 100 mg otherwise
+- For adults, 500 mg
+- doses are daily x 3 days
+
+```{r}
+data <- mutate(data, dose = if_else(WT > 20, 300, 100))
+data <- mutate(data, dose = if_else(group==3, 500, dose), dosekg = dose/WT)
+```
+
+The doses were assigned into `dose`; we need to copy that into
+`amt` as well
+
+```{r}
+data <- mutate(data, amt = dose)
+head(data)
+```
+
+
+# Azithromycin model
+```{r}
+mod <- mread(a$az_model, a$az_project)
+
+see(mod)
+```
+
+
+Update the model object to cover 3 days of dosing
+```{r}
+mod <- update(mod, end=72, delta=0.2)
+```
+
+## Simulate all age groups
+
+```{r}
+sims <- mrgsim(mod, data = data, obsonly = TRUE, Req = "CP")
+```
+
+
+Some post-processing to calculate the `AUC` on `DAY` 3
+```{r}
+sims <- mutate(sims, DAY = 1+floor(time/24)) %>% filter(DAY==3)
+
+auc <- AUC(sims, time="time", dv="CP") %>% left_join(data)
+```
+
+Now, dose normalize the AUC (and switch up the units)
+```{r}
+auc <- mutate(auc, ratio  = AUC/dosekg/1000)
+
+head(auc)
+```
+
+Mark the adult group for the plot
+```{r}
+auc <- mutate(auc, pop  = if_else(group==3, "adult", "pediatric"))
+```
+
+
+
+## Plot
+```{r}
+ggplot(data=auc, aes(x=pop, y=ratio)) + geom_boxplot()
+```
+
+
+
+# Your turn
+ 
+Find the typical per/kg dose in the adult population and 
+apply that dose to the 6 - 59 month population
+ 
+```{r}
+auc %>% group_by(group) %>% summarise(mean = mean(dosekg))
+```
+
+Let's take 7 mg/kg and simulate out 6 to 59 month old kids next to adults
+What is the distribution of the adult/pediatric auc ratio
+
+```{r}
+data4 <- filter(data, group != 2) %>% mutate(amt = WT*7)
+```
+
+```{r}
+
+sims <- mrgsim(mod, data = data4, obsonly = TRUE, Req = "CP")
+
+sims <- mutate(sims, DAY = 1 + floor(time/24)) %>% filter(DAY==3)
+
+auc <- AUC(sims, time="time", dv="CP") 
+
+auc <- 
+  left_join(auc, data4) %>% 
+  group_by(group) %>%
+  mutate(unit = 1:n()) %>%
+  ungroup
+
+auc <- 
+  dplyr::select(auc, unit, AUC, group ) %>% 
+  spread(group, AUC, sep = "")
+
+auc <- mutate(auc, ratio = group1/group3)
+```
+
+Summarize
+
+```{r}
+ggplot(data=auc, aes(x=ratio)) + geom_density() + xlim(0,5)
+
+summarize(auc, 
+          mean = mean(ratio), 
+          lower = quantile(ratio, 0.025), 
+          upper = quantile(ratio, 0.975))
+```
+
+```{r}
+mean(auc$ratio < 1)
+```
+

@@ -1,0 +1,94 @@
+---
+title: "Clinical trial simulation with `mrgsim`"
+author: "Metrum Research Group, LLC"
+date: ""
+output: 
+  html_document:
+    css: docs/src/styles.css
+---
+
+<hr><div class = spacersm></div>
+
+```{r, echo = FALSE}
+knitr::opts_chunk$set(comment='.', warning=FALSE, message=FALSE)
+```
+
+# Packages
+```{r}
+library(mrgsolve)
+library(mrgsim)
+library(ggplot2)
+library(dplyr)
+```
+
+<hr><div class = spacer></div>
+
+# PK / PD model
+```{r}
+mod <- mrgsolve:::house() %>% omat(dmat(0.1, 0.1, 0.1, 0.1))
+
+
+mod %>% 
+  ev(amt = 1000, rate = 50, cmt = 2, time = 10) %>% 
+  mrgsim %>% plot(CP + RESP ~.)
+```
+
+<hr><div class = spacer></div>
+
+# The `mrgsim` package
+
+Allows you to lay out treatment sequences, arms, populations, designs
+for a clinical trial in `yaml` format
+
+```{r}
+writeLines(readLines("mrgsim.yml"), sep="\n")
+```
+
+
+
+```{r}
+x <- load_run("mrgsim.yml")
+
+arms(x)
+```
+
+```{r}
+out <- sim_run(mod, x)
+```
+
+```{r}
+filter(out, time ==0) %>% count(arm) %>% left_join(.,arms(x))
+```
+
+
+<hr><div class = spacer></div>
+
+Take one `ID` from each arm and plot `CP` versus time to see what happened
+
+## Trough concentration over time (arm1)
+```{r}
+out %>% filter(ID ==1) %>% ggplot(., aes(time,CP)) + geom_line()
+```
+
+
+## Trough concentration over time (arm2)
+```{r}
+out %>% filter(ID ==260) %>% ggplot(., aes(time,CP)) + geom_line()
+```
+## Trough concentration over time (arm3)
+```{r}
+out %>% filter(ID ==600) %>% ggplot(., aes(time,CP)) + geom_line()
+```
+
+<hr><div class = spacer></div>
+
+## Summary of trough response by treatment arm
+```{r}
+filter(out, time==4032) %>% 
+  group_by(arm,armn) %>%
+  summarise(resp = mean(RESP), sd = sd(RESP))
+```
+
+
+<hr><div class = spacer></div>
+

@@ -1,0 +1,253 @@
+---
+title: "Simulate from Emperical Bayes Estimates"
+author: "Metrum Research Group, LLC"
+date: ""
+output: 
+  html_document:
+    css: docs/src/styles/styles.css
+    toc: true
+---
+
+# Packages
+
+```{r,message = FALSE}
+source("libPaths.R")
+library(readr)
+library(dplyr)
+library(mrgsolve)
+library(magrittr)
+
+a <- config::get()
+source(a$functions)
+knitr_config()
+```
+
+
+# Objective
+for each individual in the study, get the 
+model-predicted Cmin, Cmax, and AUC at steady state
+for the randomized dose administration
+
+- We use empirical Bayes estimates that come out 
+of the NONMEM run
+- There are multiple doses and infusion durations represented
+in the data; we need to get the right doses to the right 
+individuals
+- Simulate out 4 doses should be enough
+- Calculate AUC by trapezoidal rule; use the 
+parametric AUC calculation as a QC check
+
+
+
+
+# Load input data
+
+## Load the meropenem partab file
+
+```{r}
+tab <- read_table(a$mero_partab, skip=1)
+```
+
+
+We create a data frame with one ID per row including each 
+individual's PK parameters
+```{r}
+idata <- distinct(tab,ID,CL,V1,Q,V2)
+```
+
+## Load the meropenem data set
+
+```{r}
+data <- read_csv(a$mero_datafile, na='.')
+names(data)[1] <- "ID"
+```
+
+
+And do some grooming
+- Take only dosing records
+- meropenem is dosing every 8 hours
+- simulate a total of 12 doses
+- for IV administration, pick compartment 2
+
+```{r}
+dose <- filter(data, EVID==1)
+
+dose %<>% mutate(II=8, ADDL=11, CMT=2)
+```
+
+
+```{r}
+count(dose,AMT,RATE)
+```
+
+## Join the data set with the individual parameters
+
+```{r}
+data <- left_join(dose,idata)
+
+head(data)
+```
+
+
+
+This is important: we derive a `DOSE` column
+so that we can work with the simulated data according 
+to dose group later on
+
+```{r}
+data %<>% mutate(DOSE = AMT, DUR = AMT/RATE)
+```
+
+# Load a 2-cmt model
+
+Just take a model from the library
+
+```{r}
+mod <- mread("pk2", modlib())
+
+see(mod)
+```
+
+
+Check the parameters for this model
+
+```{r}
+param(mod)
+```
+
+
+We should inventory the parameters in the model against 
+what is in the data set
+
+```{r}
+inventory(mod,data)
+```
+
+
+
+Easy enough to fix
+```{r}
+data %<>% rename(V3 = V2, V2 = V1) %>% mutate(V1 = NULL)
+
+inventory(mod,data)
+```
+
+
+The model we are using includes a extravascular dosing 
+compartment with first order absorption controlled by 
+parameter `KA`.  Our drug is administered `IV` so 
+it's ok that we're missing `KA` in the data set.
+
+Not required ... but I update the model with the 
+parameters from the first individual to have a set 
+of "valid" parameters in the model.  Sometimes this
+helps when trying to get a sense check about whether 
+the simulation is set up correctly or not.
+
+```{r}
+mod %<>% update(param=data[1,])
+```
+
+
+
+Simulate from a time grid out to the 3rd day
+```{r}
+des <- tgrid(0, 24, 0.5) + 3*24
+```
+
+
+
+In the `mrgsim` call, let's ask for `DOSE`, `DUR` and `CL` in 
+the simulated output.  
+```{r}
+count(data,DOSE,AMT,DUR)
+```
+
+
+
+What would happen if we asked for `AMT` instead of `DOSE` here?
+
+```{r}
+out <- mrgsim(mod, carry.out="DOSE,DUR,CL",
+              data=data, tgrid=des, obsonly=TRUE)
+```
+
+```{r}
+head(out)
+
+plot(out,CP~.)
+```
+
+
+We get a mix here. You can see the variability due to duration of 
+the infusion.  It's not so clear who had the `500`, `1000`, and `5000` mg doses.
+
+So, let's summarize.
+
+```{r}
+sims <- as_data_frame(out)
+```
+
+Calculate `AUC` by trapezoidal rule
+```{r}
+auc <- 
+  sims %>% 
+  AUC(., dv = "CP") %>% 
+  dplyr::rename(tAUC = AUC) %>%
+  as_data_frame
+```
+
+
+```{r}
+auc
+```
+
+Recall that we carried `CL` into the simulated data. Let's calculate `AUC` through
+`CL` and `DOSE` to see how it matches up
+
+```{r}
+auc2 <- 
+  sims %>%
+  distinct(ID,DOSE,CL) %>%
+  mutate(pAUC = 3*DOSE/CL) %>% 
+  ungroup
+
+auc2
+```
+
+
+Calculate `Cmin` and `Cmax`
+```{r}
+minmax <- sims %>% 
+  group_by(ID,DOSE,DUR) %>% 
+  summarise(Cmin = min(CP), Cmax = max(CP)) %>% 
+  ungroup
+
+minmax
+```
+
+
+
+
+Join together and re-shape
+
+```{r}
+sum <- left_join(auc, minmax) %>% left_join(.,auc2)
+
+summ <- tidyr::gather(sum, variable, value, c(tAUC,pAUC,Cmin,Cmax))
+
+```
+
+
+# Summary of exposure metrics
+```{r}
+summ %>% 
+  ungroup %>%
+  group_by(DOSE,DUR,variable) %>%
+  summarise(Med = median(value), 
+            Mean = mean(value),
+            Min = min(value),
+            Max = max(value),
+            N=n())  %>% as_data_frame
+```
+

@@ -1,0 +1,236 @@
+---
+title: "Fit PK data in R"
+author: ""
+date: ""
+output: 
+  html_document:
+    css: docs/src/styles/styles.css
+    toc: true
+    number_sections: true
+---
+
+```{r,echo=FALSE}
+knitr::opts_chunk$set(comment='.', message=FALSE, warning=FALSE)
+set.seed(11010)
+```
+
+# Packages
+```{r}
+library(minqa)
+library(RcppDE)
+library(ggplot2)
+library(mrgsolve)
+library(dplyr)
+library(purrr)
+```
+
+<hr><div class = spacer></div>
+
+# Fit simple, single-subject PK data `R`
+
+Go to the `Theoph` data set for an example
+
+- The `exTheoph` data set gets shipped with `mrgsolve`
+
+
+```{r}
+data(exTheoph)
+```
+
+
+We'll just pick off the first `ID` to fit
+```{r}
+data <- filter(exTheoph, ID==1)
+obs  <- filter(data, evid==0)
+dose <- filter(data, evid==1)
+```
+
+```{r}
+qplot(data=data, time,conc, geom=c("line", "point"))
+```
+
+
+
+These are the observed data 
+
+```{r}
+yobs <- obs$conc %>% unlist %>% unname
+yobs
+```
+
+I'm going to capture them as a just a vector of 
+values for now.  
+
+
+Like in the warmup vignette, we create a function 
+that takes care of getting the prediction
+and calculating the objective function (ols, here).
+
+- `p` parameters
+- `.mod` model object
+- `.data` the estimation data set
+- `.yobs` vector of observed data
+- `pred` if `TRUE`, just return a prediction
+
+
+```{r}
+ols <- function(p, .mod, .data, .yobs, pred=FALSE) {
+  
+  p <- lapply(p, exp)
+  
+  .mod <- update(.mod, param=p)
+  
+  if(pred) {
+    .data <- filter(.data, evid !=0)
+    return(mrgsim(.mod,.data))
+  }
+  
+  out <- mrgsim(.mod, data=.data, obsonly=TRUE)
+  
+  y.hat <- out$CP
+  
+  sum(c(y.hat-.yobs)^2)
+}
+```
+
+The workflow is similar to the warmup vignette, but __some important differences__
+
+1. We have the parameters on log scale here, so we need to untransform
+1. We cannot use the parameters directly to get the prediction; we 
+need to perform an `update` step to bring the parameter set being proposed 
+by the optimizer into the model object
+1. We use `mrgsim` to actually generate the prediction
+    - What would happen if we simulated with `obsonly = FALSE`?
+1. When we call `ols` with `pred = TRUE`, we can get the prediction
+
+
+Pull a simple 1-cmt model from the library
+```{r}
+mod <- mread("pk1", modlib())
+```
+
+
+```{r}
+see(mod)
+```
+
+Initial estimates; we'll keep the parameters on log-scale
+
+```{r}
+theta <- log(c(CL=1, V=1, KA=0.1))
+```
+
+
+Let's introduce a new optimizer from the `minqa` package
+called `newuoa`.
+
+```{r}
+fit <- minqa::newuoa(theta, ols, .mod = mod, .data=data, .yobs = yobs)
+
+est <- setNames(fit$par, names(theta))
+
+exp(fit$par)
+```
+
+
+
+Get a  prediction at the __final__ estimate
+
+```{r}
+pred <- 
+  mod %>% 
+  update(end=25, delta=0.1) %>%
+  ols(est,.,data,yobs,pred=TRUE) %>% as.data.frame
+```
+
+
+Get a prediction at the __initial__ estimate
+```{r}
+pred_theta <- 
+  mod %>% 
+  update(end=25, delta=0.1) %>%
+  ols(theta,.,data,yobs,pred=TRUE) %>% 
+  as_data_frame
+```
+
+
+Plot of observed data and data predicted at the 
+initial and final estimates
+```{r}
+ggplot() + 
+  geom_line(data=pred, aes(time,CP),lwd=1, col="firebrick") +
+  geom_point(data=data, aes(time,conc), size=3, col="darkslateblue") +
+  geom_line(data=pred_theta, aes(time,CP), lwd=1, lty=2,col="darkgreen")
+```
+
+
+# Speed up the simulation with `qsim`
+
+```{r}
+ols.q <- function(p,.mod,.e,.data,.yobs, pred=FALSE) {
+  
+  p <- lapply(p, exp)
+  
+  .mod <- update(.mod,param=p)
+  
+  if(pred) {
+    .data <- filter(.data, evid!=0)
+    return(mrgsim(.mod,.data))
+  }
+  
+  out <- qsim(.mod, .e)
+  
+  y.hat <- out[,"CP"]
+  
+  sum(c(y.hat-.yobs)^2)
+}
+```
+
+
+```{r}
+datam <- recmatrix(as.ev(dose),times=obs$time)
+yhat <- qsim(mod,datam)
+```
+
+
+## Benchmark 
+
+```{r}
+e1 <- expression(newuoa(theta,ols.q,.mod=mod,.e=datam,.data=data,.yobs=yobs))
+e2 <- expression(newuoa(theta,ols,.mod=mod,.data=data,.yobs=yobs))
+
+rbenchmark::benchmark(eval(e1), eval(e2),replications=5)[,1:4]
+```
+
+ 
+# The optimhelp package
+
+This is in progress, but I almost always use it when working problems of any size. 
+
+
+We can make a "set" of parameters  like this
+```{r}
+library(optimhelp)
+
+
+cl <- log_par("CL", 1)
+vc <- log_par("VC", 10)
+
+p <- parset(cl,vc)
+
+```
+
+
+
+```{r}
+p
+```
+
+So we have two parameters (`CL` and `VC`) with parameters (1 and 10) and they are both on log scale.
+
+
+To start an estimation problem, call
+```{r}
+initials(p)
+```
+

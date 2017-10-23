@@ -1,0 +1,130 @@
+---
+title: ""
+date: ""
+author: ""
+output: 
+  html_document:
+    css: styles/styles.css
+---
+
+
+```{r}
+library(mrgsolve)
+library(dplyr)
+library(tidyr)
+a <- config::get()
+source(a$functions)
+knitr_config()
+```
+
+```{r}
+project <- "../devmodels/epo"
+post <- readRDS("../devmodels/epo/post_real.RDS")
+head(post)
+```
+
+```{r}
+mod <- mread("epo", project)
+```
+
+
+Drop the initial `HGB` by half
+```{r}
+mod <- param(mod, THETA19 = mod$THETA19/2)
+post <- mutate(post, THETA19 = THETA19/2)
+```
+
+```{r}
+qw <- ev(amt = 40000, ii = 168, addl = 3, rate = -2)
+tiw <- ev_days(ev(amt = 7000, rate = -2), days="m,w,f", addl = 3)
+qw <- filter(tiw, time==0) %>% mutate(amt = 40000)
+```
+
+```{r}
+data_sc <- bind_rows(tiw,qw) %>% mutate(ID = amt)
+```
+
+Sub-Q dosing
+```{r}
+mod %>% 
+  zero_re %>% 
+  mrgsim(data = data_sc, end = 672) %>%
+  plot
+```
+
+```{r}
+data_iv <- mutate(data_sc, cmt = 2, rate = 0)
+```
+
+IV dosing
+```{r}
+mod %>% 
+  zero_re %>% 
+  mrgsim(data = data_iv, end = 672) %>%
+  plot
+```
+
+Let's ramp this up for PTS
+```{r}
+iv_tiw <- ev_rep(tiw, id = 1:250) %>% mutate(cmt = 2, rate = 0)
+iv_qw <- filter(iv_tiw, time==0) %>% mutate(amt = 40000, ID = ID + 1000)
+data <- bind_rows(iv_tiw, iv_qw)
+```
+
+
+A simulation function
+
+Arguments
+
+- `i` replicate number
+- `mod` the EPO model object
+- `data` a template data set
+
+```{r}
+sim <- function(i, mod, data) {
+ mod <- param(mod, slice(post,i))
+ out <- mrgsim(mod, data = data, obsonly = TRUE,
+               end = -1, add = c(672))
+ mutate(out, irep = i, qw = as.integer(ID >= 1000))
+}
+```
+
+
+Test it out
+```{r}
+sim(100, mod, data)
+```
+
+
+Simulate
+```{r}
+set.seed(10020)
+mcRNG()
+out <- parallel::mclapply(1:101, mc.cores = 8, 
+                          sim, mod, data) %>% bind_rows
+```
+
+
+
+Our target is HGB > 8.5
+```{r}
+sum1 <- 
+out %>% 
+  group_by(irep,time,qw) %>%
+  summarise(success = mean(HGBi > 8.5)) 
+```
+
+Our success criteria is at least 40% of patients hitting the targer
+```{r}
+sum2 <- 
+  sum1 %>%
+  group_by(qw,time) %>% 
+  summarise(PR = mean(success > 0.4))
+```
+
+
+The bottom line
+```{r}
+sum2
+```
+

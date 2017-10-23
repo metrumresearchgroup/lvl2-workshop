@@ -1,0 +1,333 @@
+---
+title: "Categorical R / Rcpp"
+author: "Metrum Research Group, LLC"
+date: ""
+output: 
+  html_document: 
+    css: docs/src/styles/styles.css
+    toc: true
+    number_sections: true
+---
+
+```{r,echo=FALSE}
+source("libPaths.R")
+knitr::opts_chunk$set(comment='.', message=FALSE, warning=FALSE)
+```
+
+# Packages
+
+```{r}
+library(dplyr)
+library(mrgsolve)
+library(readr)
+library(magrittr)
+library(ggplot2)
+library(parallel)
+```
+
+
+
+# A simple categorical covariate simulation
+
+- Using `$PLUGIN Rcpp` to get at that `R` namespace
+- Allows us to get all of the `dpqr` functions
+
+```{r}
+code <- '
+$PLUGIN Rcpp
+$MAIN
+int i = R::rbinom(1, 0.5);
+$CAPTURE i
+'
+```
+
+- This takes a little longer to compile compared to models without the Rcpp `$PLUGIN`
+
+```{r}
+mod <- mcode_cache("categorical", code)
+```
+
+
+```{r}
+out <- mrgsim(mod, end = 10000)
+out
+mean(out$i)
+```
+
+
+# Now, we want multinomial simulation
+
+- See `?rmultinom`
+- Distribute `size` objects into `K` boxes
+
+
+# First, an `R`-based solution
+
+- Here, we will call the `R` function `rmultinom` from our model code
+- Performance hit, but we can mitigate that if we do it right
+
+## First, let's see how to use an `R` function in the model
+
+```{r}
+code_print <- '
+$PLUGIN Rcpp
+
+$GLOBAL
+Rcpp::Function prnt("print");
+
+$MAIN
+if(TIME==3) {
+  prnt("The time is 3");
+  prnt(TIME);
+}
+'
+```
+
+- And run this
+```{r}
+mod <- mcode_cache("print", code_print)
+
+mrgsim(mod, end = 5)
+```
+
+
+## Back to the `R`-based solution
+
+
+```{r}
+code3 <- '
+$PARAM n = 100
+
+$PLUGIN Rcpp mrgx
+
+$GLOBAL
+Rcpp::Function rmulti("rmultinom");
+Rcpp::NumericVector probs;
+Rcpp::NumericVector ans;
+
+$ENV
+probs <- c(0.25, 0.25, 0.5)
+
+$PREAMBLE
+probs = mrgx::get<Rcpp::NumericVector>("probs", self);
+
+$MAIN
+ans = rmulti(1, n, probs);
+
+$TABLE
+capture ans1 = ans(0,0);
+capture ans2 = ans(1,0);
+capture ans3 = ans(2,0);
+'
+```
+
+- This time we really call back to `R` and use the `R` version of the function
+    - The signature is the same as the one we use in `R`
+    - The return object (matrix) is also the same as what et get in `R`
+- This time, we also invoke `$PLUGIN mrgx` along with `$ENV`
+    - We can specify the `probs` vector in `$ENV`
+        - You write plain old `R` code in `$ENV`
+    - We can __get__ that `probs` vector through `mrgx::get` 
+        - This is a templated function ... we have to tell the function 
+        the __type__ of object we are expecting to get back
+        - Notice that the call is `mrgx::get<Rcpp::NumericVector>get(...)`, 
+        we are assigning that to `probs`, which is also a `Rcpp::NumericVector`
+        - Mysterious `self` object; just think of that as the location where we hide
+        the address of what is in `$ENV`
+
+
+- Run this
+
+```{r}
+mod <- mcode_cache("categorical3", code3)
+out <- mrgsim(mod, param = list(n = 100))
+out
+```
+
+```{r}
+out <- mrgsim(mod, param = list(n = 10000))
+out
+```
+
+
+Work a little with the contents of `$ENV`
+
+```{r}
+env_ls(mod)
+```
+
+```{r}
+mod@envir
+```
+
+```{r}
+env_get(mod)
+```
+
+
+- Update our `probs` vector and resimulate
+
+```{r}
+mod <- env_update(mod, probs = c(0.1, 0.7, 0.2))
+mrgsim(mod, param = list(n = 10000))
+```
+
+
+- You can stash any `R` object in there and go in and get it later
+- Best to stick to `numeric`, `matrix` and `vector`
+    - `data.frame` and `list` are hard to work with 
+
+## A more-realistic implementation
+
+- Here, we pre-simulate every individual in `$PREAMBLE`
+
+```{r}
+code3b <- '
+$PARAM n = 100
+
+$PLUGIN Rcpp mrgx
+
+$GLOBAL
+Rcpp::Function rmulti("rmultinom");
+Rcpp::NumericVector probs;
+Rcpp::NumericMatrix ans;
+
+$ENV
+probs <- c(0.25, 0.25, 0.5)
+
+$PREAMBLE
+probs = mrgx::get<Rcpp::NumericVector>("probs", self);
+
+ans = rmulti(self.nid, 1, probs);
+
+$MAIN
+capture ans1 = ans(0,self.idn);
+capture ans2 = ans(1,self.idn);
+capture ans3 = ans(2,self.idn);
+'
+```
+
+- Simulate to see what happens in 1000 IDs
+
+```{r}
+mod <- mcode_cache("categorical3b", code3b)
+out <- mrgsim(mod, end = -1, nid = 1000)
+out
+```
+
+- Summarize to confirm
+```{r}
+mean(out$ans1)
+mean(out$ans2)
+mean(out$ans3)
+```
+
+
+### Create a function to return the group number
+
+- Name `get_group`
+- Returns `int`
+- Arguments: the matrix of sims and the ID number
+    - Pass matrix by reference
+
+
+```{r, eval = FALSE}
+code3c <- '
+$PARAM n = 100
+
+$PLUGIN Rcpp mrgx
+
+$GLOBAL
+Rcpp::Function rmulti("rmultinom");
+Rcpp::NumericVector probs;
+Rcpp::NumericMatrix ans;
+
+int get_group(Rcpp::NumericMatrix& ans, int idn) {
+  if(ans(0,idn)==1) return 1;
+  if(ans(1,idn)==1) return 2;
+  if(ans(2,idn)==1) return 3;
+  return 0;
+}
+
+$ENV
+probs <- c(0.25, 0.25, 0.5)
+
+$PREAMBLE
+probs = mrgx::get<Rcpp::NumericVector>("probs", self);
+ans = rmulti(self.nid, 1, probs);
+
+
+$MAIN
+capture group = get_group(ans,self.idn);
+capture ans1 = ans(0,self.idn);
+capture ans2 = ans(1,self.idn);
+capture ans3 = ans(2,self.idn);
+'
+```
+
+
+```{r, eval = FALSE}
+mod <- mcode_cache("categorical3c", code3c)
+out <- mrgsim(mod, end = -1, nid = 1000)
+out
+```
+```{r, eval = FALSE}
+filter(out, group ==2)
+```
+
+
+# Here is a fully-`C++` implementation
+
+- This is harder to do, but performance will be better
+- Note that `rmultinom` is different from most of the other `dqpr` functions
+    - I had to go find this solution on `SO`
+
+```{r}
+code2 <- '
+$PARAM n = 100
+
+$PLUGIN Rcpp
+
+$GLOBAL
+Rcpp::NumericVector prob(3);
+Rcpp::IntegerVector ans(3);
+int k;
+
+$PREAMBLE
+prob[0] = 0.25;
+prob[1] = 0.25;
+prob[2] = 0.5;
+k = int(prob.size());
+
+$MAIN
+R::rmultinom(n, prob.begin(), k, ans.begin());
+
+$TABLE
+capture ans1 = ans[0];
+capture ans2 = ans[1];
+capture ans3 = ans[2];
+'
+```
+
+## What's going on 
+
+- Declare our data objects in `$GLOBAL`
+    - Unlike `R`, when we want a vector to be numeric or integer, we have to explicitly 
+    state that
+    - Declare with the name(size) (e.g. `Rcpp::NumericVector foo(10)`)
+- Initialize their values in `$PREAMBLE`
+    - `prob` we set to `c(0.25, 0.25, 0.5)`
+    - `k` we want to be the number of boxes
+- In `$MAIN` we actually call the `rmultinom` function
+    - This pattern is odd compared to the other functions, but it's what we have to do
+    - The last argument is a pointer to the `ans` vector; the `answer` gets filled in there; 
+    there is no return value to `rmultinom`
+- In `$CAPTURE`, we just collect the `ans` values
+
+```{r}
+mod <- mcode_cache("categorical2", code2)
+out <- mrgsim(mod, param = list(n = 1000))
+out
+```
+
+
