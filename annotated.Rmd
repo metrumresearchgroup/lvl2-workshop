@@ -9,6 +9,7 @@ output:
 ---
 
 ```{r,echo = FALSE}
+source("libPaths.R")
 knitr::opts_chunk$set(comment='.', warning = FALSE, message = FALSE)
 ```
 

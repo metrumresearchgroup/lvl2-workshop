@@ -103,7 +103,8 @@ mod <- mcode_cache("rnorm_wt", code)
 
 
 ```{r}
-mrgsim(mod)
+set.seed(101010)
+mrgsim(mod) %>% filter(time==0)
 ```
 
 
@@ -120,6 +121,72 @@ mrgsim(mod, end=-1, nid=5)
 * Create a model specification file that simulates a mixture model
 * Start with a clearance difference in two populations
 * Next, try to code a clearance difference in three populations
+
+```{r}
+code <- '
+$PLUGIN Rcpp
+
+$PARAM TVCL  = 1, TVV = 20, TVKA = 1.2
+PPOP1 = 0.7, TVCL2 = 0.6
+
+$OMEGA 0.09
+
+$MAIN
+double CL = TVCL;
+double V = TVV;
+double KA = TVKA;
+
+if(NEWIND <= 1 ) {
+  int POP = 1 + R::rbinom(1,PPOP1);
+}
+
+if(POP==2) CL = TVCL2;
+
+CL = CL * exp(ETA(1));
+
+$PKMODEL cmt = "GUT CENT" , depot = TRUE
+
+$TABLE
+double CP = CENT/V;
+
+$CAPTURE POP, CP, CL
+'
+
+mod <- mcode_cache("mix", code)
+
+```
+```{r}
+data <- expand.ev(ID = 1:1000, amt = 100)
+
+out <- mrgsim(mod, data = data, 
+              end = -1, obsonly = TRUE)
+
+head(out)
+
+sims <- as.data.frame(out)
+count(sims, POP)
+
+sims %>% 
+  group_by(POP) %>%
+  summarise(meen = mean(CL))
+
+```
+
+```{r}
+code <- '
+$PLUGIN Rcpp
+
+$MAIN
+
+double variate = R::runif(0,1);
+
+double POP = 1;
+if(variate > 0.3) POP = 2;
+if(variate > 0.9) POP = 3;
+
+'
+
+```
 
 
 ## Call an R function
@@ -147,15 +214,29 @@ code <- '
 $PLUGIN Rcpp
 
 $GLOBAL
-Rcpp::Function print("print");
+Rcpp::Function myprint("print");
 
 
 $MAIN
 double y = R::rnorm(100,10);
 
-print(y);
+myprint(y);
 '
 ```
+
+```{r, eval = FALSE}
+code <- '
+$MAIN
+double y = 12;
+
+if(TIME  ==2) {
+ report("The value of y is"); 
+ report(y);
+}
+'
+out <- mcode_cache("report", code) %>% mrgsim
+```
+
 
 ```{r, eval = FALSE}
 mod <- mcode_cache("print", code)
@@ -176,7 +257,7 @@ Sys.sleep(1)
 
 code <- '
 
-$PLUGIN mrgx
+$PLUGIN mrgx Rcpp
 
 $MAIN 
 if(NEWIND <= 1) {

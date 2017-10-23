@@ -46,7 +46,8 @@ results.
 
 
 ```{r}
-
+fitt <- lm(y~x, data)
+fitt
 ```
 
 ## Check the results
@@ -54,15 +55,32 @@ results.
 - We can use the `tidy` function from `broom`
 
 ```{r}
-
+tidy(fit)
 ```
 
 # Fit with `stats::optim`
 
 - Function to minimize
-
 - Vector of initial estimates
--
+- Call to optim
+```{r}
+
+ols_obj <- function(par, y, x) {
+
+  yhat <- par[1] + par[2]*x
+  
+  sum((yhat - y)^2)
+}
+
+theta <- c(1,1)
+
+y <- as.numeric(data$y)
+x <- as.numeric(data$x)
+
+
+
+```
+
 
 
 ## Function to minimize
@@ -82,12 +100,13 @@ results.
 Using `stats::optim`
 
 ```{r}
-
+fit <- optim(theta, ols_obj, y = y, 
+             x = x)
 ```
 
 Check fit, parameters coefficients
 ```{r}
-
+fit
 ```
 
 
@@ -95,10 +114,16 @@ Check fit, parameters coefficients
 
 ```{r}
 set.seed(22020)
-
-
+fit <- optim(theta, ols_obj, y = y, 
+             x = x, method = "SANN", 
+             control  = list(trace = 10), 
+             )
+fit$par
 ```
 
+```{r}
+fit$value
+```
 
 
 ## Derivative-free optimization
@@ -106,7 +131,8 @@ set.seed(22020)
 - Use `minqa::newuoa`
 
 ```{r}
-
+fit <- minqa::newuoa(theta, ols_obj, y = y, 
+             x = x, control = list(iprint = 3))
 ```
 
 
@@ -126,15 +152,15 @@ Did we get the same answer?
 - one for each parameter
 
 ```{r}
-lower <- c()
-upper <- c()
+lower <- c(-4, -4)
+upper <- c(100, 100)
 ```
 
 
 - set a seed
 
 ```{r}
-
+set.seed(101)
 ```
 
 ## Control
@@ -149,7 +175,8 @@ control <- DEoptim.control(trace = 10)
 - `fun`, `lower`, `upper`, `...`, `control`
 
 ```{r}
-fit.de <- DEoptim()
+fit.de <- DEoptim(ols_obj, lower, upper, y, x, 
+                  control = control)
 ```
 
 
@@ -164,9 +191,22 @@ fit.de <- DEoptim()
 - But now, we want to do __maximum__ likelihood
 
 ```{r}
-linear_ml <- function() {
+linear_ml <- function(par, y, x) {
 
+  yhat <- par[1] + par[2]*x
+  
+  -1*sum((dnorm(y, yhat, exp(par[3]), 
+                log = TRUE)))
 }
+
+theta_ml <- c(7, 1, log(5))
+
+fit <- optim(theta_ml, linear_ml, 
+             y = y, x = x, method = "SANN")
+
+fit$par
+exp(fit$par[3])
+summary(fitt)
 ```
 
 ## Initial estimates
@@ -235,7 +275,8 @@ And the log-scale estimation is still on target:
 - use `hessian=TRUE` in `stats::optim`
 
 ```{r}
-
+fit <- optim(theta_ml, linear_ml, y = y, x = x, hessian = TRUE)
+fit
 ```
 
 
@@ -250,25 +291,32 @@ fit$hessian
 - `sqrt`
 
 ```{r}
-
+sqrt(diag(solve(fit$hessian)))
 ```
 
 Standard errors from `stats::optim`
 ```{r}
-s
+sqrt(diag(solve(fit$hessian)))
 ```
 
 
 Standard errors from `lm`
 ```{r}
-
+tidy(fitt)
 ```
 
 
 ## Standard errors with `numDeriv::hession`
 
 ```{r}
-hes <- numDeriv::hessian(linear_ml, fit$par, data=data)
+linear_ml <- function(par, y, xx) {
+
+  yhat <- par[1] + par[2]*xx
+  
+  -1*sum((dnorm(y, yhat, exp(par[3]), 
+                log = TRUE)))
+}
+hes <- numDeriv::hessian(linear_ml, x = fit$par, y = y, xx = x)
 sqrt(diag(solve(hes)))
 ```
 

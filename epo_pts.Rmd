@@ -106,12 +106,18 @@ Let's ramp this up for PTS
 
 TIW data
 ```{r}
-iv_tiw <- ev_rep(tiw, id = 1:250) %>% mutate(cmt = 2, rate = 0)
+iv_tiw <- 
+  ev_rep(tiw, id = 1:250) %>% 
+  mutate(cmt = 2, rate = 0)
+
+iv_tiw
 ```
 
 QW data
 ```{r}
-iv_qw <- filter(iv_tiw, time==0) %>% mutate(amt = 40000, ID = ID + 1000)
+iv_qw <- 
+  filter(iv_tiw, time==0) %>% 
+  mutate(amt = 40000, ID = ID + 1000)
 ```
 
 If we bind this all together, we can simulate both regimens in one go
@@ -133,14 +139,21 @@ Arguments
 - `data` a template data set
 
 ```{r}
+
+omegas <- as_bmat(post, "OMEGA")
+sigmas <- as_bmat(post, "SIGMA")
+
 sim <- function(i, mod, data) {
 
  mod <- param(mod, slice(post,i))
+ mod <- omat(mod, omegas[[i]])
+ mod <- smat(mod, sigmas[[i]])
  
  out <- mrgsim(mod, data = data, obsonly = TRUE,
                end = -1, add = 672)
 
-  mutate(out, irep = i, qw = as.integer(ID >= 1000))
+  mutate(out, irep = i, 
+         qw = as.integer(ID >= 1000))
 }
 ```
 

@@ -106,12 +106,13 @@ Rcpp::NumericVector probs;
 Rcpp::NumericVector ans;
 
 $ENV
-probs <- c(0.25, 0.25, 0.5)
+myprobs <- c(0.25, 0.25, 0.5)
 
 $PREAMBLE
-probs = mrgx::get<Rcpp::NumericVector>("probs", self);
+probs = mrgx::get<Rcpp::NumericVector>("myprobs", self);
 
 $MAIN
+dobule CL = 2;
 ans = rmulti(1, n, probs);
 
 $TABLE

@@ -35,6 +35,8 @@ Go to the `Theoph` data set for an example
 
 ```{r}
 data(exTheoph)
+
+exTheoph
 ```
 
 
@@ -106,6 +108,7 @@ by the optimizer into the model object
 
 Pull a simple 1-cmt model from the library
 ```{r}
+?modlib
 mod <- mread("pk1", modlib())
 ```
 
@@ -140,7 +143,9 @@ Get a  prediction at the __final__ estimate
 pred <- 
   mod %>% 
   update(end=25, delta=0.1) %>%
-  ols(est,.,data,yobs,pred=TRUE) %>% as.data.frame
+  ols(est,.,data,yobs,pred=TRUE) %>%
+  as.data.frame
+pred
 ```
 
 

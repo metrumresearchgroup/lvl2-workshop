@@ -50,8 +50,14 @@ col2 <- "firebrick"
 # Read and fix up the data set
 ```{r}
 a <- config::get()
-data <- read_csv(a$mero_datafile,na='.')  %>% mutate(CMT=1, DUR = AMT/RATE)
-names(data)[1] <- "ID"
+data <- 
+  read_csv(a$mero_datafile,na='.')  %>%
+  mutate(CMT=1, DUR = round(AMT/RATE,1))
+
+count(data, EVID, DUR)
+
+head(data)
+
 ```
 
 
@@ -81,6 +87,7 @@ Derive two data frames
 obs <- filter(data, EVID==0)
 head(obs)
 dose <- filter(data, EVID==1)
+dose
 ```
 
 
@@ -119,6 +126,7 @@ des1 <- tgrid(0,3.1,0.1)
 des2 <- tgrid(0,8,1)
 des <- c(des1,des2)
 des
+stime(des)
 ```
 
 
@@ -138,13 +146,14 @@ Returns simulated data set
 ```{r}
 simvpc <- function(i) {
   mod %>% 
-    data_set(dose) %>%
-    carry_out(DUR) %>%
-    obsonly %>%
-    mrgsim(tgrid=des) %>% 
+    data_set(data) %>%
+    carry_out(DUR, a.u.g) %>%
+    obsonly %>% obsaug %>%
+    mrgsim(tgrid=des, delta = 0.1) %>% 
     filter(TIME > 0 & Y > 0) %>%
     mutate(irep = i)
 }
+simvpc(10)
 ```
 
 Simulate
@@ -165,7 +174,8 @@ sum1 <-
   out %>% 
   filter(Y > 0) %>%
   group_by(DUR,irep,TIME) %>%
-  summarise(med=med(Y), lo=lo(Y), hi=hi(Y), N=n())
+  summarise(med=med(Y), lo=lo(Y),
+            hi=hi(Y), N=n())
 ```
 
 

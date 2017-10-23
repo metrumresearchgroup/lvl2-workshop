@@ -37,6 +37,7 @@ set.seed(889110)
 
 ```{r}
 mod <- mread("mapk", "model")
+see(mod)
 ```
 
 
@@ -68,6 +69,7 @@ vp %<>% mutate(VPOP2 = 1:n())
 source("src/objects.R")
 
 names(pki)
+pki$iiv_cobi
 
 pki$cl1
 ```
@@ -78,6 +80,7 @@ pki$cl1
 - These parameters are for `RAFi`
 ```{r}
 cov2 <- cl2 + ka2 + V2 ~ rlmvnorm(log(c(cl2,ka2,V2)),iiv_vemu) | VPOP2
+
 ```
 
 - Similar deal for `MEKi` and `ERKi`
@@ -92,11 +95,16 @@ cov4 <- cl4 + ka4 + V4 ~
 - We collect these objects in to a `covset` ... 
 ```{r}
 cov_set <- covset(cov2,cov3,cov4)
+
+cov_set
 ```
 
 - And we can mutate the `vp` data set to add the simulated PK values
 ```{r}
 vp %<>% mutate_random(cov_set, envir = pki)
+#vp <- mutate_random(vp, cov_set, envir = pki)
+
+names(vp)
 ```
 
 - Derive the rate constants; we must do this matching names in the model
@@ -108,6 +116,7 @@ vp %<>% mutate(ke2 = cl2/V2, ke3 = cl3/V3, ke4 = cl4/V4)
 Now, split up the Vpop in to a list that we can use to simulate
 ```{r}
 l <- split(vp, vp$VPOP2)
+length(l)
 ```
 
 # Create all mono-tx regimens that we will need to address 
@@ -117,7 +126,7 @@ l <- split(vp, vp$VPOP2)
 data0 <- expand.ev(amt=0, cmt=8)
 ```
 
-- BFRAF-i CMT 8  - vemurafanib VEMU
+- BRAF-i CMT 8  - vemurafanib VEMU
 - VEMU_dose = 960;    %mg, BID
 ```{r}
 cmtn(mod, "RAFi_gut")
@@ -141,6 +150,7 @@ dataG
 e <- ev(amt = 400, cmt = 12, ii = 1, addl = 20, ID = 1)
 
 datag <- ev_repeat(e, n = 2, wait = 7)
+datag
 ```
 
 - Give it a test

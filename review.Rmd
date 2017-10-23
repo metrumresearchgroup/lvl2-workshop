@@ -1,4 +1,81 @@
 
+```{r}
+library(mrgsolve)
+```
+
+
+```{r}
+code <- '
+$PARAM TVCL  = 1, V = 30, KA  = 1.2
+FLAG = 0, WT = 70, DUR = 1.5
+
+$OMEGA @labels ETA_CL
+0.09
+
+
+
+$MAIN // $PK
+
+simeta();
+
+double CL = TVCL * pow(WT/ 70, 0.75)*exp(ETA_CL);
+
+F_CENT = 2;
+// R_CENT , rate = -1
+D_CENT  = DUR;
+// ALAG_GUT 
+
+if(TIME > 24) ...
+
+EVID, NEWIND
+
+dxdt_INDICATOR = 0;
+
+$CMT GUT CENT INDICATOR
+
+$ODE
+
+if(SOLVERTIME) 
+
+dxdt_GUT = -KA*GUT;
+dxdt_CENT = KA*GUT - (CL/V)*CENT;
+
+//$PKMODEL cmt = "GUT CENT", depot = TRUE
+
+$SIGMA 
+0.02
+
+$TABLE //$ERROR
+capture IPRED = CENT/V;
+capture DV = IPRED*exp(EPS(1));
+
+simeps();
+'
+
+mod <- mcode_cache("review", code)
+
+idata <- data.frame(ID = 1:50, WT = 70)
+
+data <- expand.ev(ID = 1:50, amt = c(100, 300))
+head(data)
+mod %>% 
+  Req(IPRED, DV) %>% 
+  data_set(data) %>%  
+  mrgsim(end = 72, delta = 0.1) %>% plot
+
+
+```
+
+```{r}
+mod <- mcode_cache("review", code, 
+                   soloc = '.'
+                   )
+
+loadso(mod)
+
+```
+
+
 
 
 
