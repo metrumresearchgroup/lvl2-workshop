@@ -4,6 +4,8 @@
 
 - Instructor copy branch [here](https://github.com/metrumresearchgroup/lvl2-workshop/tree/instructor-copy)
 
+- Rendered content can be found [here](https://github.com/metrumresearchgroup/lvl2-workshop/tree/master/docs)
+
 ## Download
 
 - [Master (clean) Copy](https://github.com/metrumresearchgroup/lvl2-workshop/archive/master.zip)
